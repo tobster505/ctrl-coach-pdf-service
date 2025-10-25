@@ -1,117 +1,258 @@
-/**
- * CTRL Export Service · fill-template (Coach PDF)
- * Place at: /pages/api/fill-template.js
- * Streams a filled PDF (Content-Type: application/pdf).
- */
+// api/fill-template.js
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-export const config = { runtime: "nodejs" };
+// ---------- util: __dirname (ESM) ----------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
 
-import fs from "fs/promises";
-import path from "path";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+// ---------- helpers ----------
+const S  = (v, fb = '') => (v == null ? String(fb) : String(v));
+const N  = (v, fb = 0)  => (Number.isFinite(+v) ? +v : +fb);
+const A  = (v) => (Array.isArray(v) ? v : []);
+const G  = (o, k, fb = '') => S((o && o[k]) ?? fb, fb);
 
-/* ───────────── utils ───────────── */
-const S = (v, fb = "") => (v == null ? String(fb) : String(v));
-const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
-const norm = (v, fb = "") =>
-  String(v ?? fb)
-    .normalize("NFKC")
-    .replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2013\u2014]/g, "-").replace(/\u2026/g, "...")
-    .replace(/\u00A0/g, " ").replace(/[•·]/g, "-")
-    .replace(/\u2194/g, "<->").replace(/\u2192/g, "->").replace(/\u2190/g, "<-")
-    .replace(/\u2191/g, "^").replace(/\u2193/g, "v").replace(/[\u2196-\u2199]/g, "->")
-    .replace(/\u21A9/g, "<-").replace(/\u21AA/g, "->").replace(/\u00D7/g, "x")
-    .replace(/[\u200B-\u200D\u2060]/g, "").replace(/[\uD800-\uDFFF]/g, "").replace(/[\uE000-\uF8FF]/g, "")
-    .replace(/\t/g, " ").replace(/\r\n?/g, "\n").replace(/[ \f\v]+/g, " ").replace(/[ \t]+\n/g, "\n").trim();
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-function parseDataParam(b64ish) {
-  if (!b64ish) return {};
-  let s = String(b64ish);
-  try { s = decodeURIComponent(s); } catch {}
-  s = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (s.length % 4) s += "=";
-  try { return JSON.parse(Buffer.from(s, "base64").toString("utf8")); }
-  catch { return {}; }
-}
+/** Draw text if non-empty (simple wrap). Returns final y used. */
+function drawText(page, text, opts = {}) {
+  const {
+    x = 40,
+    y = 700,
+    font,
+    size = 12,
+    maxWidth = 500,
+    lineHeight = size * 1.2,
+    color = rgb(0, 0, 0),
+    maxLines = 14
+  } = opts;
 
-/* word-wrap draw helper (TL coords → BL inside) */
-function drawTextBox(page, font, text, spec = {}, opts = {}) {
-  const { x=40, y=40, w=540, size=12, lineGap=3, color=rgb(0,0,0), align="left" } = spec;
-  const maxLines = (opts.maxLines ?? spec.maxLines ?? 6);
-  const hard = norm(text || "");
-  const lines = hard.split(/\n/).map(s => s.trim());
-  const wrapped = [];
-  const widthOf = (s) => font.widthOfTextAtSize(s, Math.max(1, size));
-  const wrapLine = (ln) => {
-    const words = ln.split(/\s+/); let cur = "";
-    for (const w0 of words) {
-      const nxt = cur ? `${cur} ${w0}` : w0;
-      if (widthOf(nxt) <= w || !cur) cur = nxt;
-      else { wrapped.push(cur); cur = w0; }
+  const t = S(text, '').trim();
+  if (!t) return y;
+
+  // crude wrapping by splitting on spaces
+  const words = t.split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    const width = font.widthOfTextAtSize(test, size);
+    if (width <= maxWidth) {
+      line = test;
+    } else {
+      lines.push(line);
+      line = w;
+      if (lines.length >= maxLines) break;
     }
-    wrapped.push(cur);
-  };
-  for (const ln of lines) wrapLine(ln);
+  }
+  if (lines.length < maxLines && line) lines.push(line);
 
-  const out = wrapped.slice(0, maxLines);
-  const pageH = page.getHeight();
-  const baselineY = pageH - y;
-  const lineH = Math.max(1, size) + lineGap;
+  let yy = y;
+  for (const ln of lines) {
+    page.drawText(ln, { x, y: yy, size, font, color });
+    yy -= lineHeight;
+    if (yy < 0) break;
+  }
+  return yy;
+}
 
-  let yCursor = baselineY;
-  for (const ln of out) {
-    let xDraw = x; const wLn = widthOf(ln);
-    if (align === "center") xDraw = x + (w - wLn) / 2;
-    else if (align === "right") xDraw = x + (w - wLn);
-    page.drawText(ln, { x: xDraw, y: yCursor - size, size: Math.max(1, size), font, color });
-    yCursor -= lineH;
+/** Draw a bulleted list (array of strings). Returns final y. */
+function drawList(page, items, opts = {}) {
+  const {
+    x = 40, y = 700, bullet = '•', gap = 6,
+    font, size = 11, maxWidth = 480, lineHeight = size * 1.3,
+    maxItems = 6
+  } = opts;
+
+  const arr = A(items).slice(0, maxItems).map(S).filter(Boolean);
+  let yy = y;
+  for (const it of arr) {
+    page.drawText(bullet, { x, y: yy, size, font });
+    yy = drawText(page, it, { x: x + 14, y: yy, font, size, maxWidth, lineHeight, maxLines: 4 }) - gap;
+    if (yy < 40) break;
+  }
+  return yy;
+}
+
+/** Try to fetch and embed a PNG image (best-effort). */
+async function embedPngFromUrl(pdfDoc, url) {
+  try {
+    if (!url) return null;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const buf = await r.arrayBuffer();
+    return await pdfDoc.embedPng(buf);
+  } catch {
+    return null;
   }
 }
 
-const rectTLtoBL = (page, box, inset = 0) => {
-  const H = page.getHeight();
-  const x = N(box.x) + inset;
-  const w = Math.max(0, N(box.w) - inset * 2);
-  const h = Math.max(0, N(box.h) - inset * 2);
-  const y = H - N(box.y) - N(box.h) + inset;
-  return { x, y, w, h };
-};
+/** Safe loader for a file inside /public */
+async function loadTemplateBytes(tplName) {
+  const abs = path.resolve(__dirname, '..', 'public', tplName);
+  return await fs.readFile(abs);
+}
 
-function resolveDomKey(...candidates) {
-  const mapLabel = { concealed:"C", triggered:"T", regulated:"R", lead:"L" };
-  for (const c0 of candidates.flat()) {
-    const c = String(c0 || "").trim();
-    if (!c) continue;
-    const u = c.toUpperCase();
-    if (["C","T","R","L"].includes(u)) return u;
-    const l = c.toLowerCase();
-    if (mapLabel[l]) return mapLabel[l];
+// ---------- handler ----------
+export default async function handler(req, res) {
+  try {
+    // ---- 1) Params ---------------------------------------------------------
+    const method = req.method || 'GET';
+    const isPost = method === 'POST';
+
+    const tpl = S(isPost ? req.body?.tpl : req.query?.tpl).trim();
+    if (!tpl) {
+      res.statusCode = 400;
+      return res.end('Missing tpl');
+    }
+
+    const raw = Boolean(isPost ? req.body?.raw : req.query?.raw);
+
+    const b64 = S(isPost ? req.body?.data : req.query?.data).trim();
+    let data = {};
+    if (b64) {
+      try {
+        const json = Buffer.from(b64, 'base64').toString('utf8');
+        data = JSON.parse(json || '{}');
+      } catch {
+        data = {};
+      }
+    }
+
+    // ---- 2) Load template --------------------------------------------------
+    const tplBytes = await loadTemplateBytes(tpl);
+
+    // if raw=1, just stream the untouched template
+    if (raw) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Cache-Control', 'no-store');
+      res.statusCode = 200;
+      return res.end(tplBytes);
+    }
+
+    // ---- 3) Paint with guards ---------------------------------------------
+    let outBytes = null;
+
+    try {
+      const pdfDoc = await PDFDocument.load(tplBytes);
+      const pages = pdfDoc.getPages();
+      const font  = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+      // unpack payload safely
+      const p = {
+        fullName:  G(data?.person, 'fullName', ''),
+        email:     G(data?.person, 'email', ''),
+        dateLbl:   S(data?.dateLbl, ''),
+        dom:       S(data?.dom, ''),
+        domchar:   S(data?.domchar, ''),
+        domdesc:   S(data?.domdesc, ''),
+        spiderdesc:S(data?.spiderdesc, ''),
+        seqpat:    S(data?.seqpat, ''),
+        theme:     S(data?.theme, ''),
+        themeExpl: S(data?.themeExpl, ''),
+        workwcol:  A(data?.workwcol).slice(0, 4),
+        workwlead: A(data?.workwlead).slice(0, 4),
+        tips:      A(data?.tips).slice(0, 2),
+        actions:   A(data?.actions).slice(0, 2),
+        chartUrl:  S(data?.chartUrl, '')
+      };
+
+      // ---------- Page 1: name/date (adjust coords if needed) ----------
+      if (pages[0]) {
+        drawText(pages[0], p.fullName, { x: 60, y: 760, font, size: 22, maxWidth: 470, maxLines: 1 });
+        drawText(pages[0], p.dateLbl,  { x: 430, y: 785, font, size: 12, maxWidth: 140, maxLines: 1 });
+      }
+
+      // ---------- Page 3: dominant description ----------
+      if (pages[2]) {
+        drawText(pages[2], p.domdesc, { x: 30, y: 685, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 20 });
+      }
+
+      // ---------- Page 4: spider explanation ----------
+      if (pages[3]) {
+        drawText(pages[3], p.spiderdesc, { x: 30, y: 585, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 18 });
+      }
+
+      // ---------- Page 5: sequence narrative ----------
+      if (pages[4]) {
+        drawText(pages[4], p.seqpat, { x: 25, y: 520, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 18 });
+      }
+
+      // ---------- Page 6: theme & explanation ----------
+      if (pages[5]) {
+        drawText(pages[5], p.theme ? `Theme: ${p.theme}` : '', { x: 25, y: 540, font, size: 12, maxWidth: 550, maxLines: 1 });
+        drawText(pages[5], p.themeExpl, { x: 25, y: 520, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 18 });
+      }
+
+      // ---------- Page 7–8: work with colleagues & leaders ----------
+      // Layout: two columns per page (Look / Work)
+      const drawWorkPairs = (page, pairs, topY) => {
+        let y = topY;
+        for (const pair of A(pairs)) {
+          const look = S(pair?.look, '');
+          const work = S(pair?.work, '');
+          if (!look && !work) continue;
+
+          // left column: LOOK
+          drawText(page, look, { x: 30, y, font, size: 12, maxWidth: 240, lineHeight: 15, maxLines: 5 });
+          // right column: WORK
+          drawText(page, work, { x: 320, y, font, size: 12, maxWidth: 240, lineHeight: 15, maxLines: 5 });
+
+          y -= 80;
+          if (y < 70) break;
+        }
+      };
+
+      if (pages[6]) drawWorkPairs(pages[6], p.workwcol, 440);   // page 7
+      if (pages[7]) drawWorkPairs(pages[7], p.workwlead, 440);  // page 8
+
+      // ---------- Page 9–10–11: tips / actions ----------
+      // Page 9: tips (left) + actions (right) as lists
+      if (pages[8]) {
+        drawList(pages[8], p.tips,    { x: 30,  y: 450, font, size: 12, maxWidth: 250, lineHeight: 15, maxItems: 6 });
+        drawList(pages[8], p.actions, { x: 320, y: 450, font, size: 12, maxWidth: 250, lineHeight: 15, maxItems: 6 });
+      }
+
+      // Optional: Page 4 (or anywhere): embed chart image if provided
+      if (p.chartUrl) {
+        const png = await embedPngFromUrl(pdfDoc, p.chartUrl);
+        if (png && pages[3]) {
+          const { width, height } = png.scale(0.75);
+          pages[3].drawImage(png, { x: 32, y: 260, width: clamp(width, 100, 560), height: clamp(height, 80, 280) });
+        }
+      }
+
+      outBytes = await pdfDoc.save();
+    } catch (paintErr) {
+      // Any paint error falls back to returning the raw template instead of 500
+      console.error('fill-template: paint error', paintErr);
+      outBytes = tplBytes;
+    }
+
+    // ---- 4) Respond --------------------------------------------------------
+    res.setHeader('Content-Type', 'application/pdf');
+    // If you want forced download, uncomment:
+    // const outName = S(isPost ? req.body?.out : req.query?.out, 'ctrl.pdf').replace(/[^\w.\-]+/g, '_');
+    // res.setHeader('Content-Disposition', `attachment; filename="${outName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.statusCode = 200;
+    return res.end(outBytes);
+  } catch (e) {
+    console.error('fill-template: fatal', e);
+    // As a last resort try to stream the template if available
+    try {
+      const tpl = S(req.method === 'POST' ? req.body?.tpl : req.query?.tpl).trim();
+      if (tpl) {
+        const bytes = await loadTemplateBytes(tpl);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Cache-Control', 'no-store');
+        res.statusCode = 200;
+        return res.end(bytes);
+      }
+    } catch {}
+    res.statusCode = 500;
+    return res.end('fill-template failed');
   }
-  return "";
 }
-
-function paintStateHighlight(page3, dom, cfg = {}) {
-  const b = (cfg.absBoxes && cfg.absBoxes[dom]) || null;
-  if (!b) return;
-  const radius  = Number.isFinite(+((cfg.styleByState||{})[dom]?.radius)) ? +((cfg.styleByState||{})[dom].radius) : (cfg.highlightRadius ?? 28);
-  const inset   = Number.isFinite(+((cfg.styleByState||{})[dom]?.inset))  ? +((cfg.styleByState||{})[dom].inset)  : (cfg.highlightInset  ?? 6);
-  const opacity = Number.isFinite(+cfg.fillOpacity) ? +cfg.fillOpacity : 0.45;
-  const boxBL = rectTLtoBL(page3, b, inset);
-  const shade = rgb(251/255, 236/255, 250/255);
-  page3.drawRectangle({ x: boxBL.x, y: boxBL.y, width: boxBL.w, height: boxBL.h, borderRadius: radius, color: shade, opacity });
-  const perState = (cfg.labelByState && cfg.labelByState[dom]) || null;
-  if (!perState || cfg.labelText == null || cfg.labelSize == null) return;
-  return { labelX: perState.x, labelY: perState.y };
-}
-
-/* locked coordinates (TL, pages 1-based) — tuned for slim coach template */
-const LOCKED = {
-  meta: { units: "pt", origin: "TL", pages: "1-based" },
-  p1: { name: { x:7, y:473, w:500, size:30, align:"center" }, date: { x:210, y:600, w:500, size:25, align:"left" } },
-  p3: {
-    domChar:{ x:272,y:640,w:630,size:23,align:"left", maxLines:6 },
-    domDesc:{ x: 25,y:685,w:550,size:18,align:"left", maxLines:12 },
-    state: {
-     
-::contentReference[oaicite:0]{index=0}
