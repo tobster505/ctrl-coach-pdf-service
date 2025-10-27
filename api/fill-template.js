@@ -16,7 +16,79 @@ const G  = (o, k, fb = '') => S((o && o[k]) ?? fb, fb);
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-/** Draw text if non-empty (simple wrap). Returns final y used. */
+// Deep merge (for layout objects)
+function deepMerge(a, b) {
+  if (!b) return a;
+  if (!a || typeof a !== 'object' || Array.isArray(a)) a = {};
+  for (const k of Object.keys(b)) {
+    const av = a[k], bv = b[k];
+    if (bv && typeof bv === 'object' && !Array.isArray(bv)) {
+      a[k] = deepMerge(av && typeof av === 'object' && !Array.isArray(av) ? av : {}, bv);
+    } else {
+      a[k] = bv;
+    }
+  }
+  return a;
+}
+
+// Parse modern compact layout QS:
+//   layoutQS=p3.domDesc:x=72,y=700,w=630,size=11; p4.chart:x=355,y=315,w=270,h=250
+function parseLayoutQS(qs) {
+  const out = {};
+  if (!qs || typeof qs !== 'string') return out;
+  const blocks = qs.split(';').map(s => s.trim()).filter(Boolean);
+  for (const block of blocks) {
+    const [path, kvs] = block.split(':');
+    if (!path || !kvs) continue;
+    const [pageKey, fieldKey] = path.trim().split('.');
+    if (!pageKey || !fieldKey) continue;
+    const cfg = {};
+    for (const kv of kvs.split(',').map(s => s.trim()).filter(Boolean)) {
+      const [kRaw, vRaw] = kv.split('=').map(s => s && s.trim());
+      if (!kRaw) continue;
+      const mapKey = ({ lines: 'maxLines', max: 'maxLines', fontsize: 'size' }[kRaw.toLowerCase()]) || kRaw;
+      let v = vRaw;
+      if (['x','y','w','h','size','maxLines'].includes(mapKey)) {
+        const n = Number(vRaw); if (!Number.isNaN(n)) v = n;
+      }
+      if (mapKey === 'align') {
+        const m = { l:'left', left:'left', c:'center', centre:'center', center:'center', r:'right', right:'right', j:'justify', justify:'justify' };
+        v = m[String(vRaw||'').toLowerCase()] || vRaw;
+      }
+      cfg[mapKey] = v;
+    }
+    out[pageKey] = out[pageKey] || {};
+    out[pageKey][fieldKey] = Object.assign(out[pageKey][fieldKey] || {}, cfg);
+  }
+  return out;
+}
+
+// Parse legacy flat QS (your old style):
+//   p3_domDesc_x=72&p3_domDesc_y=700&p3_domDesc_w=630&p3_domDesc_size=11
+function parseLegacyFlatQS(queryObj) {
+  const out = {};
+  if (!queryObj || typeof queryObj !== 'object') return out;
+  for (const [k, v] of Object.entries(queryObj)) {
+    const m = /^p(\d+)_([a-zA-Z0-9]+)_(x|y|w|h|size|max|lines|align)$/.exec(k);
+    if (!m) continue;
+    const [, pageNum, fieldRaw, prop] = m;
+    const pageKey  = 'p' + pageNum;
+    const fieldKey = fieldRaw;
+    const keyNorm  = (prop === 'lines' || prop === 'max') ? 'maxLines' : prop;
+    let val = v;
+    if (['x','y','w','h','size','maxLines'].includes(keyNorm)) {
+      const n = Number(v); if (!Number.isNaN(n)) val = n;
+    } else if (keyNorm === 'align') {
+      const m2 = { l:'left', left:'left', c:'center', centre:'center', center:'center', r:'right', right:'right', j:'justify', justify:'justify' };
+      val = m2[String(v||'').toLowerCase()] || v;
+    }
+    out[pageKey] = out[pageKey] || {};
+    out[pageKey][fieldKey] = Object.assign(out[pageKey][fieldKey] || {}, { [keyNorm]: val });
+  }
+  return out;
+}
+
+/** Draw text with wrapping + simple alignment. Returns final y used. */
 function drawText(page, text, opts = {}) {
   const {
     x = 40,
@@ -26,13 +98,13 @@ function drawText(page, text, opts = {}) {
     maxWidth = 500,
     lineHeight = size * 1.2,
     color = rgb(0, 0, 0),
-    maxLines = 14
+    maxLines = 14,
+    align = 'left'
   } = opts;
 
   const t = S(text, '').trim();
   if (!t) return y;
 
-  // crude wrapping by splitting on spaces
   const words = t.split(/\s+/);
   const lines = [];
   let line = '';
@@ -51,7 +123,14 @@ function drawText(page, text, opts = {}) {
 
   let yy = y;
   for (const ln of lines) {
-    page.drawText(ln, { x, y: yy, size, font, color });
+    let xx = x;
+    if (align !== 'left') {
+      const lw = font.widthOfTextAtSize(ln, size);
+      if (align === 'center') xx = x + (maxWidth - lw) / 2;
+      else if (align === 'right') xx = x + (maxWidth - lw);
+      // (justify omitted for simplicity; left/center/right covered)
+    }
+    page.drawText(ln, { x: xx, y: yy, size, font, color });
     yy -= lineHeight;
     if (yy < 0) break;
   }
@@ -63,14 +142,14 @@ function drawList(page, items, opts = {}) {
   const {
     x = 40, y = 700, bullet = '•', gap = 6,
     font, size = 11, maxWidth = 480, lineHeight = size * 1.3,
-    maxItems = 6
+    maxItems = 6, maxLines = 4, align = 'left'
   } = opts;
 
   const arr = A(items).slice(0, maxItems).map(S).filter(Boolean);
   let yy = y;
   for (const it of arr) {
     page.drawText(bullet, { x, y: yy, size, font });
-    yy = drawText(page, it, { x: x + 14, y: yy, font, size, maxWidth, lineHeight, maxLines: 4 }) - gap;
+    yy = drawText(page, it, { x: x + 14, y: yy, font, size, maxWidth, lineHeight, maxLines, align }) - gap;
     if (yy < 40) break;
   }
   return yy;
@@ -95,7 +174,12 @@ async function loadTemplateBytes(tplName) {
   return await fs.readFile(abs);
 }
 
-// ---------- handler ----------
+// Convenience to read a field config from layout with defaults
+function conf(layout, pageKey, fieldKey, defaults = {}) {
+  const node = layout?.[pageKey]?.[fieldKey] || {};
+  return { ...defaults, ...node };
+}
+
 export default async function handler(req, res) {
   try {
     // ---- 1) Params ---------------------------------------------------------
@@ -121,7 +205,21 @@ export default async function handler(req, res) {
       }
     }
 
-    // ---- 2) Load template --------------------------------------------------
+    // ---- 2) Gather layout overrides ---------------------------------------
+    // Base from payload
+    let layoutV6 = (data && data.layoutV6 && typeof data.layoutV6 === 'object') ? data.layoutV6 : {};
+
+    // Modern compact QS
+    const layoutFromQS = parseLayoutQS(String(isPost ? (req.body?.layoutQS || '') : (req.query?.layoutQS || '')));
+
+    // Legacy flat QS (p3_domDesc_x etc.)
+    const legacyQS = parseLegacyFlatQS(isPost ? (req.body || {}) : (req.query || {}));
+
+    // Merge in increasing priority: payload < layoutQS < legacy flat
+    layoutV6 = deepMerge(layoutV6, layoutFromQS);
+    layoutV6 = deepMerge(layoutV6, legacyQS);
+
+    // ---- 3) Load template --------------------------------------------------
     const tplBytes = await loadTemplateBytes(tpl);
 
     // if raw=1, just stream the untouched template
@@ -132,7 +230,7 @@ export default async function handler(req, res) {
       return res.end(tplBytes);
     }
 
-    // ---- 3) Paint with guards ---------------------------------------------
+    // ---- 4) Paint with guards ---------------------------------------------
     let outBytes = null;
 
     try {
@@ -159,89 +257,119 @@ export default async function handler(req, res) {
         chartUrl:  S(data?.chartUrl, '')
       };
 
-      // ---------- Page 1: name/date (adjust coords if needed) ----------
+      // ---------- Page 1: name/date ----------
       if (pages[0]) {
-        drawText(pages[0], p.fullName, { x: 60, y: 760, font, size: 22, maxWidth: 470, maxLines: 1 });
-        drawText(pages[0], p.dateLbl,  { x: 430, y: 785, font, size: 12, maxWidth: 140, maxLines: 1 });
+        const cName = conf(layoutV6, 'p1', 'name', { x: 60,  y: 760, w: 470, size: 22, maxLines: 1, align: 'left' });
+        const cDate = conf(layoutV6, 'p1', 'date', { x: 430, y: 785, w: 140, size: 12, maxLines: 1, align: 'left' });
+        drawText(pages[0], p.fullName, { x: cName.x, y: cName.y, maxWidth: cName.w, size: cName.size, maxLines: cName.maxLines, align: cName.align, font });
+        drawText(pages[0], p.dateLbl,  { x: cDate.x, y: cDate.y, maxWidth: cDate.w, size: cDate.size, maxLines: cDate.maxLines, align: cDate.align, font });
       }
 
       // ---------- Page 3: dominant description ----------
       if (pages[2]) {
-        drawText(pages[2], p.domdesc, { x: 30, y: 685, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 20 });
+        const c = conf(layoutV6, 'p3', 'domDesc', { x: 30, y: 685, w: 550, size: 13, lineHeight: 16, maxLines: 20, align: 'left' });
+        drawText(pages[2], p.domdesc, { x: c.x, y: c.y, font, size: c.size, maxWidth: c.w, lineHeight: c.lineHeight, maxLines: c.maxLines, align: c.align });
       }
 
-      // ---------- Page 4: spider explanation ----------
+      // ---------- Page 4: spider explanation + optional chart ----------
       if (pages[3]) {
-        drawText(pages[3], p.spiderdesc, { x: 30, y: 585, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 18 });
+        const c = conf(layoutV6, 'p4', 'spiderDesc', { x: 30, y: 585, w: 550, size: 13, lineHeight: 16, maxLines: 18, align: 'left' });
+        drawText(pages[3], p.spiderdesc, { x: c.x, y: c.y, font, size: c.size, maxWidth: c.w, lineHeight: c.lineHeight, maxLines: c.maxLines, align: c.align });
+
+        if (p.chartUrl) {
+          const png = await embedPngFromUrl(pdfDoc, p.chartUrl);
+          if (png) {
+            const def = { x: 32, y: 260, w: null, h: null }; // defaults if no overrides
+            const cfg = conf(layoutV6, 'p4', 'chart', def);
+            if (cfg.w && cfg.h) {
+              pages[3].drawImage(png, { x: cfg.x, y: cfg.y, width: cfg.w, height: cfg.h });
+            } else {
+              const scaled = png.scale(0.75);
+              const w = clamp(scaled.width,  100, 560);
+              const h = clamp(scaled.height,  80, 280);
+              pages[3].drawImage(png, { x: cfg.x, y: cfg.y, width: w, height: h });
+            }
+          }
+        }
       }
 
       // ---------- Page 5: sequence narrative ----------
       if (pages[4]) {
-        drawText(pages[4], p.seqpat, { x: 25, y: 520, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 18 });
+        const c = conf(layoutV6, 'p5', 'seqpat', { x: 25, y: 520, w: 550, size: 13, lineHeight: 16, maxLines: 18, align: 'left' });
+        drawText(pages[4], p.seqpat, { x: c.x, y: c.y, font, size: c.size, maxWidth: c.w, lineHeight: c.lineHeight, maxLines: c.maxLines, align: c.align });
       }
 
       // ---------- Page 6: theme & explanation ----------
       if (pages[5]) {
-        drawText(pages[5], p.theme ? `Theme: ${p.theme}` : '', { x: 25, y: 540, font, size: 12, maxWidth: 550, maxLines: 1 });
-        drawText(pages[5], p.themeExpl, { x: 25, y: 520, font, size: 13, maxWidth: 550, lineHeight: 16, maxLines: 18 });
+        const cTheme = conf(layoutV6, 'p6', 'theme',     { x: 25, y: 540, w: 550, size: 12, maxLines: 1, align: 'left' });
+        const cExpl  = conf(layoutV6, 'p6', 'themeExpl', { x: 25, y: 520, w: 550, size: 13, lineHeight: 16, maxLines: 18, align: 'left' });
+        drawText(pages[5], p.theme ? `Theme: ${p.theme}` : '', { x: cTheme.x, y: cTheme.y, font, size: cTheme.size, maxWidth: cTheme.w, maxLines: cTheme.maxLines, align: cTheme.align });
+        drawText(pages[5], p.themeExpl, { x: cExpl.x, y: cExpl.y, font, size: cExpl.size, maxWidth: cExpl.w, lineHeight: cExpl.lineHeight, maxLines: cExpl.maxLines, align: cExpl.align });
       }
 
-      // ---------- Page 7–8: work with colleagues & leaders ----------
-      // Layout: two columns per page (Look / Work)
-      const drawWorkPairs = (page, pairs, topY) => {
-        let y = topY;
+      // ---------- Page 7–8: work with colleagues & leaders (two columns) ----------
+      const drawWorkPairs = (page, pairs, cLook, cWork) => {
+        let yLook = cLook.y;
+        let yWork = cWork.y;
         for (const pair of A(pairs)) {
           const look = S(pair?.look, '');
           const work = S(pair?.work, '');
           if (!look && !work) continue;
 
           // left column: LOOK
-          drawText(page, look, { x: 30, y, font, size: 12, maxWidth: 240, lineHeight: 15, maxLines: 5 });
-          // right column: WORK
-          drawText(page, work, { x: 320, y, font, size: 12, maxWidth: 240, lineHeight: 15, maxLines: 5 });
+          const yAfterLook = drawText(page, look, {
+            x: cLook.x, y: yLook, font,
+            size: cLook.size, maxWidth: cLook.w,
+            lineHeight: cLook.lineHeight, maxLines: cLook.maxLines, align: cLook.align
+          });
 
-          y -= 80;
-          if (y < 70) break;
+          // right column: WORK
+          const yAfterWork = drawText(page, work, {
+            x: cWork.x, y: yWork, font,
+            size: cWork.size, maxWidth: cWork.w,
+            lineHeight: cWork.lineHeight, maxLines: cWork.maxLines, align: cWork.align
+          });
+
+          // move down by fixed block gap
+          yLook = Math.min(yAfterLook, yAfterWork) - (cLook.gap || 10);
+          yWork = yLook;
+          if (yLook < 70) break;
         }
       };
 
-      if (pages[6]) drawWorkPairs(pages[6], p.workwcol, 440);   // page 7
-      if (pages[7]) drawWorkPairs(pages[7], p.workwlead, 440);  // page 8
+      if (pages[6]) {
+        const cLook = conf(layoutV6, 'p7', 'look', { x: 30,  y: 440, w: 240, size: 12, lineHeight: 15, maxLines: 5, align: 'left', gap: 8 });
+        const cWork = conf(layoutV6, 'p7', 'work', { x: 320, y: 440, w: 240, size: 12, lineHeight: 15, maxLines: 5, align: 'left', gap: 8 });
+        drawWorkPairs(pages[6], p.workwcol, cLook, cWork);
+      }
+      if (pages[7]) {
+        const cLook = conf(layoutV6, 'p8', 'look', { x: 30,  y: 440, w: 240, size: 12, lineHeight: 15, maxLines: 5, align: 'left', gap: 8 });
+        const cWork = conf(layoutV6, 'p8', 'work', { x: 320, y: 440, w: 240, size: 12, lineHeight: 15, maxLines: 5, align: 'left', gap: 8 });
+        drawWorkPairs(pages[7], p.workwlead, cLook, cWork);
+      }
 
-      // ---------- Page 9–10–11: tips / actions ----------
-      // Page 9: tips (left) + actions (right) as lists
+      // ---------- Page 9: tips / actions ----------
       if (pages[8]) {
-        drawList(pages[8], p.tips,    { x: 30,  y: 450, font, size: 12, maxWidth: 250, lineHeight: 15, maxItems: 6 });
-        drawList(pages[8], p.actions, { x: 320, y: 450, font, size: 12, maxWidth: 250, lineHeight: 15, maxItems: 6 });
+        const cTips = conf(layoutV6, 'p9', 'tips',    { x: 30,  y: 450, w: 250, size: 12, lineHeight: 15, maxItems: 6, maxLines: 4, align: 'left' });
+        const cActs = conf(layoutV6, 'p9', 'actions', { x: 320, y: 450, w: 250, size: 12, lineHeight: 15, maxItems: 6, maxLines: 4, align: 'left' });
+        drawList(pages[8], p.tips,    { x: cTips.x, y: cTips.y, font, size: cTips.size, maxWidth: cTips.w, lineHeight: cTips.lineHeight, maxItems: cTips.maxItems, maxLines: cTips.maxLines, align: cTips.align });
+        drawList(pages[8], p.actions, { x: cActs.x, y: cActs.y, font, size: cActs.size, maxWidth: cActs.w, lineHeight: cActs.lineHeight, maxItems: cActs.maxItems, maxLines: cActs.maxLines, align: cActs.align });
       }
 
-      // Optional: Page 4 (or anywhere): embed chart image if provided
-      if (p.chartUrl) {
-        const png = await embedPngFromUrl(pdfDoc, p.chartUrl);
-        if (png && pages[3]) {
-          const { width, height } = png.scale(0.75);
-          pages[3].drawImage(png, { x: 32, y: 260, width: clamp(width, 100, 560), height: clamp(height, 80, 280) });
-        }
-      }
-
+      // Done
       outBytes = await pdfDoc.save();
     } catch (paintErr) {
-      // Any paint error falls back to returning the raw template instead of 500
       console.error('fill-template: paint error', paintErr);
-      outBytes = tplBytes;
+      outBytes = tplBytes; // fallback to raw template
     }
 
-    // ---- 4) Respond --------------------------------------------------------
+    // ---- 5) Respond --------------------------------------------------------
     res.setHeader('Content-Type', 'application/pdf');
-    // If you want forced download, uncomment:
-    // const outName = S(isPost ? req.body?.out : req.query?.out, 'ctrl.pdf').replace(/[^\w.\-]+/g, '_');
-    // res.setHeader('Content-Disposition', `attachment; filename="${outName}"`);
     res.setHeader('Cache-Control', 'no-store');
     res.statusCode = 200;
     return res.end(outBytes);
   } catch (e) {
     console.error('fill-template: fatal', e);
-    // As a last resort try to stream the template if available
     try {
       const tpl = S(req.method === 'POST' ? req.body?.tpl : req.query?.tpl).trim();
       if (tpl) {
