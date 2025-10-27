@@ -16,50 +16,53 @@ const G  = (o, k, fb = '') => S((o && o[k]) ?? fb, fb);
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const okObj = (o) => o && typeof o === 'object' && !Array.isArray(o);
 
-// ---------- DEFAULT COORDS (BAKED FROM USER PDF) ----------
+// ---------- DEFAULT COORDS (BAKED FROM USER PDF; TOP-LEFT ORIGIN) ----------
 /*
-  Naming: p{page}.{field} = { x,y,w,h?, size, maxLines, lineHeight? }
-  You can override ANY of these at runtime using URL params:
-    &p3_domDesc_x=72&p3_domDesc_y=700&p3_domDesc_w=630&p3_domDesc_size=11
-  or by sending a layout object in data.layoutV6 (same keys).
+  IMPORTANT:
+  - These defaults are in **Top-Left (TL)** origin to match your “User” service.
+  - We’ll convert TL -> BL at draw time so you can keep reusing your old URL params.
+  - You can override ANY of these at runtime using URL params, e.g.:
+      &p3_domDesc_x=72&p3_domDesc_y=700&p3_domDesc_w=630&p3_domDesc_size=11
+  - Or via a payload object: data.layoutV6 = { p3: { domDesc: { x,y,w,size,maxLines,... } }, meta:{ origin:"TL" } }
 */
-const LOCKED = {
+const LOCKED_TL = {
   // PAGE 1
   p1: {
-    name: { x: 60,  y: 760, w: 470, size: 22, maxLines: 1 },
-    date: { x: 430, y: 785, w: 140, size: 12, maxLines: 1 },
+    name: { x: 7,   y: 473, w: 500, size: 30, maxLines: 1 },  // User header style
+    date: { x: 210, y: 600, w: 500, size: 25, maxLines: 1 },  // User header style
   },
   // PAGE 2 (OPTIONAL HEADER REPEAT)
-  p2: { name: { x: 60, y: 785, w: 470, size: 10, maxLines: 1 }, date: { x: 430, y: 785, w: 140, size: 10, maxLines: 1 } },
+  p2: {
+    name: { x: 60,  y: 785, w: 470, size: 10, maxLines: 1 },
+    date: { x: 430, y: 785, w: 140, size: 10, maxLines: 1 }
+  },
   p3: {
-    // Dominant character & description
-    domChar: { x: 265, y: 640, w: 630, size: 25, maxLines: 1 },
-    domDesc: { x: 72,  y: 700, w: 630, size: 11, maxLines: 28, lineHeight: 13.5 },
-    name:    { x: 60,  y: 785, w: 470, size: 10, maxLines: 1 }, // optional header repeat
+    domChar: { x: 265, y: 640, w: 630, size: 25, maxLines: 1 },                    // from User
+    domDesc: { x: 72,  y: 700, w: 630, size: 11, maxLines: 28, lineHeight: 13.5 }, // from User
+    name:    { x: 60,  y: 785, w: 470, size: 10, maxLines: 1 },
     date:    { x: 430, y: 785, w: 140, size: 10, maxLines: 1 },
   },
   p4: {
-    // Spider narrative + chart image
-    spiderDesc: { x: 80,  y: 340, w: 260, size: 11, maxLines: 24, lineHeight: 13.5 },
-    chart:      { x: 355, y: 315, w: 270, h: 250 },
+    // You asked for the chart to match the User PDF look
+    chart:      { x: 20,  y: 225, w: 570, h: 280 },          // User chart box
+    spiderDesc: { x: 80,  y: 340, w: 260, size: 11, maxLines: 24, lineHeight: 13.5 }, // User
     name:       { x: 60,  y: 785, w: 470, size: 10, maxLines: 1 },
     date:       { x: 430, y: 785, w: 140, size: 10, maxLines: 1 },
   },
   p5: {
-    seqpat: { x: 70, y: 170, w: 630, size: 11, maxLines: 26, lineHeight: 13.5 },
+    seqpat: { x: 70, y: 170, w: 630, size: 11, maxLines: 26, lineHeight: 13.5 }, // User
     name:   { x: 60, y: 785, w: 470, size: 10, maxLines: 1 },
     date:   { x: 430, y: 785, w: 140, size: 10, maxLines: 1 },
   },
   p6: {
-    theme:     { x: 70,  y: 170, w: 630, size: 11, maxLines: 1 },
-    themeExpl: { x: 70,  y: 150, w: 630, size: 11, maxLines: 20, lineHeight: 13.5 }, // sits just under theme line
+    theme:     { x: 70,  y: 170, w: 630, size: 11, maxLines: 1 },                 // User
+    themeExpl: { x: 70,  y: 150, w: 630, size: 11, maxLines: 20, lineHeight: 13.5 }, // User
     name:      { x: 60,  y: 785, w: 470, size: 10, maxLines: 1 },
     date:      { x: 430, y: 785, w: 140, size: 10, maxLines: 1 },
   },
-  // P7 / P8: Coach template uses “work with colleagues / leaders” pairs.
-  // We keep a simple two-column layout, but you can still set a topY here.
+  // P7 / P8: pairs (two columns)
   p7: {
-    workPairsTopY: { y: 440 }, // starting Y for pairs
+    workPairsTopY: { y: 440 },
     leftColX: 30, rightColX: 320, colW: 240, size: 12, lineHeight: 15,
     name: { x: 60, y: 785, w: 470, size: 10, maxLines: 1 },
     date: { x: 430, y: 785, w: 140, size: 10, maxLines: 1 },
@@ -72,15 +75,16 @@ const LOCKED = {
   },
   // P9: Tips & Actions (two vertical lists)
   p9: {
-    tipsHdr: { x: 70,  y: 122, w: 320, size: 12, maxLines: 1 },    // optional, we draw list items mainly
+    tipsHdr: { x: 70,  y: 122, w: 320, size: 12, maxLines: 1 },    // headers optional
     actsHdr: { x: 400, y: 122, w: 320, size: 12, maxLines: 1 },
     tipsBox: { x: 70,  y: 155, w: 315, size: 11, maxLines: 24, lineHeight: 13.5 },
     actsBox: { x: 400, y: 155, w: 315, size: 11, maxLines: 24, lineHeight: 13.5 },
-    // list drawing below uses separate routine; these boxes set the starting coordinates
     list:    { bulletGap: 6, itemMaxLines: 4, maxItems: 6 },
     name:    { x: 60,  y: 785, w: 470, size: 10, maxLines: 1 },
     date:    { x: 430, y: 785, w: 140, size: 10, maxLines: 1 },
-  }
+  },
+  // Meta: default origin to TL to match User coordinates
+  meta: { origin: 'TL' }
 };
 
 // ---------- URL override parser (pX_field_prop=...) ----------
@@ -98,7 +102,7 @@ function parseUrlOverrides(q) {
     const numProps = new Set(['x','y','w','h','size','maxLines','lineHeight']);
     out[page][field][prop] = numProps.has(prop) ? N(val) : S(val);
   }
-  // Special cases for p7/p8 pair layout columns/topY (friendly keys)
+  // Friendly keys for pair layout
   for (const [key, val] of entries) {
     const m2 = key.match(/^p(7|8)_(leftColX|rightColX|colW|size|lineHeight|workPairsTopY)$/);
     if (!m2) continue;
@@ -106,6 +110,11 @@ function parseUrlOverrides(q) {
     out[page] = out[page] || {};
     if (m2[2] === 'workPairsTopY') out[page].workPairsTopY = { y: N(val) };
     else out[page][m2[2]] = N(val);
+  }
+  // Optional global origin override via URL: &origin=TL or &origin=BL
+  if (q && typeof q.origin === 'string') {
+    out.meta = out.meta || {};
+    out.meta.origin = q.origin.toUpperCase() === 'TL' ? 'TL' : 'BL';
   }
   return out;
 }
@@ -123,6 +132,20 @@ function deepMerge(a, b) {
     }
   }
   return a;
+}
+
+// ---------- origin conversion ----------
+const isTL = (meta) => (S(meta?.origin, 'TL').toUpperCase() === 'TL');
+const toBLy = (page, yTL) => page.getHeight() - yTL;
+
+// Convert a box or field (with x,y, etc.) from TL to BL if needed
+function resolveBox(page, box, useTL) {
+  if (!box) return null;
+  const out = { ...box };
+  if (useTL && typeof out.y === 'number') {
+    out.y = toBLy(page, out.y);
+  }
+  return out;
 }
 
 // ---------- draw helpers ----------
@@ -215,8 +238,8 @@ export default async function handler(req, res) {
     const urlOverrides = parseUrlOverrides(req.query || {});
     // Structured layout overrides in payload
     const layoutV6     = okObj(data?.layoutV6) ? data.layoutV6 : {};
-    // Merge: LOCKED <- urlOverrides <- layoutV6  (layoutV6 wins over URL if both present)
-    const L = deepMerge(deepMerge(JSON.parse(JSON.stringify(LOCKED)), urlOverrides), layoutV6);
+    // Merge: LOCKED_TL <- urlOverrides <- layoutV6  (layoutV6 wins over URL if both present)
+    const L = deepMerge(deepMerge(JSON.parse(JSON.stringify(LOCKED_TL)), urlOverrides), layoutV6);
 
     const tplBytes = await loadTemplateBytes(tpl);
     if (raw) {
@@ -232,6 +255,9 @@ export default async function handler(req, res) {
       const pdfDoc = await PDFDocument.load(tplBytes);
       const pages  = pdfDoc.getPages();
       const font   = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+      // Decide origin once (URL overrides can set &origin=TL or BL; payload can set layoutV6.meta.origin)
+      const originTL = isTL(L.meta);
 
       const p = {
         fullName:  G(data?.person, 'fullName', ''),
@@ -251,35 +277,53 @@ export default async function handler(req, res) {
         chartUrl:  S(data?.chartUrl, '')
       };
 
-      // --- Page headers (P1 + optional repeats on P2–P10) ---
+      // --- helper to draw page header for any page ---
       const drawPageHeader = (i) => {
         const key = `p${i}`;
-        if (!pages[i-1] || !L[key]) return;
-        if (L[key].name) drawText(pages[i-1], p.fullName, { font, ...L[key].name });
-        if (L[key].date) drawText(pages[i-1], p.dateLbl, { font, ...L[key].date });
+        const page = pages[i-1];
+        if (!page || !L[key]) return;
+        if (L[key].name) {
+          const box = resolveBox(page, L[key].name, originTL);
+          drawText(page, p.fullName, { font, ...box });
+        }
+        if (L[key].date) {
+          const box = resolveBox(page, L[key].date, originTL);
+          drawText(page, p.dateLbl, { font, ...box });
+        }
       };
 
-      // P1
+      // P1 header
       drawPageHeader(1);
 
       // P3 dominant character / description
       if (pages[2] && L.p3) {
         drawPageHeader(3);
-        if (L.p3.domChar) drawText(pages[2], p.domchar, { font, ...L.p3.domChar });
-        if (L.p3.domDesc) drawText(pages[2], p.domdesc, { font, ...L.p3.domDesc });
+        if (L.p3.domChar) {
+          const box = resolveBox(pages[2], L.p3.domChar, originTL);
+          drawText(pages[2], p.domchar, { font, ...box });
+        }
+        if (L.p3.domDesc) {
+          const box = resolveBox(pages[2], L.p3.domDesc, originTL);
+          drawText(pages[2], p.domdesc, { font, ...box });
+        }
       }
 
       // P4 spider text + chart
       if (pages[3] && L.p4) {
         drawPageHeader(4);
-        if (L.p4.spiderDesc) drawText(pages[3], p.spiderdesc, { font, ...L.p4.spiderDesc });
+        if (L.p4.spiderDesc) {
+          const box = resolveBox(pages[3], L.p4.spiderDesc, originTL);
+          drawText(pages[3], p.spiderdesc, { font, ...box });
+        }
         if (p.chartUrl && L.p4.chart) {
           const png = await embedPngFromUrl(pdfDoc, p.chartUrl);
           if (png) {
-            const w = N(L.p4.chart.w, 270), h = N(L.p4.chart.h, 250);
+            const rawBox = L.p4.chart;
+            const box = resolveBox(pages[3], rawBox, originTL);
+            const w = N(box.w, 270), h = N(box.h, 250);
             pages[3].drawImage(png, {
-              x: N(L.p4.chart.x, 355),
-              y: N(L.p4.chart.y, 315),
+              x: N(box.x, 355),
+              y: N(box.y, 315),
               width: clamp(w, 100, 560),
               height: clamp(h, 80,  560)
             });
@@ -290,26 +334,39 @@ export default async function handler(req, res) {
       // P5 sequence pattern
       if (pages[4] && L.p5?.seqpat) {
         drawPageHeader(5);
-        drawText(pages[4], p.seqpat, { font, ...L.p5.seqpat });
+        const box = resolveBox(pages[4], L.p5.seqpat, originTL);
+        drawText(pages[4], p.seqpat, { font, ...box });
       }
 
       // P6 theme + explanation
       if (pages[5] && L.p6) {
         drawPageHeader(6);
-        if (L.p6.theme)     drawText(pages[5], p.theme ? `Theme: ${p.theme}` : '', { font, ...L.p6.theme });
-        if (L.p6.themeExpl) drawText(pages[5], p.themeExpl, { font, ...L.p6.themeExpl });
+        if (L.p6.theme) {
+          const box = resolveBox(pages[5], L.p6.theme, originTL);
+          drawText(pages[5], p.theme ? `Theme: ${p.theme}` : '', { font, ...box });
+        }
+        if (L.p6.themeExpl) {
+          const box = resolveBox(pages[5], L.p6.themeExpl, originTL);
+          drawText(pages[5], p.themeExpl, { font, ...box });
+        }
       }
 
       // P7: Work with colleagues (pairs)
       if (pages[6] && L.p7) {
         drawPageHeader(7);
-        const topY = N(L.p7.workPairsTopY?.y, 440);
+        const rawTop = L.p7.workPairsTopY?.y ?? 440;
+        const topY = originTL ? toBLy(pages[6], rawTop) : rawTop;
         let y = topY;
         for (const pair of p.workwcol) {
           const look = S(pair?.look, ''), work = S(pair?.work, '');
           if (!look && !work) continue;
-          drawText(pages[6], look, { font, x: N(L.p7.leftColX, 30),  y, w: N(L.p7.colW, 240), size: N(L.p7.size, 12), maxLines: 5, lineHeight: N(L.p7.lineHeight, 15) });
-          drawText(pages[6], work, { font, x: N(L.p7.rightColX, 320), y, w: N(L.p7.colW, 240), size: N(L.p7.size, 12), maxLines: 5, lineHeight: N(L.p7.lineHeight, 15) });
+          const leftX  = N(L.p7.leftColX, 30);
+          const rightX = N(L.p7.rightColX, 320);
+          const colW   = N(L.p7.colW, 240);
+          const size   = N(L.p7.size, 12);
+          const lh     = N(L.p7.lineHeight, 15);
+          drawText(pages[6], look, { font, x: leftX,  y, w: colW, size, maxLines: 5, lineHeight: lh });
+          drawText(pages[6], work, { font, x: rightX, y, w: colW, size, maxLines: 5, lineHeight: lh });
           y -= 80; if (y < 70) break;
         }
       }
@@ -317,13 +374,19 @@ export default async function handler(req, res) {
       // P8: Work with leaders (pairs)
       if (pages[7] && L.p8) {
         drawPageHeader(8);
-        const topY = N(L.p8.workPairsTopY?.y, 440);
+        const rawTop = L.p8.workPairsTopY?.y ?? 440;
+        const topY = originTL ? toBLy(pages[7], rawTop) : rawTop;
         let y = topY;
         for (const pair of p.workwlead) {
           const look = S(pair?.look, ''), work = S(pair?.work, '');
           if (!look && !work) continue;
-          drawText(pages[7], look, { font, x: N(L.p8.leftColX, 30),  y, w: N(L.p8.colW, 240), size: N(L.p8.size, 12), maxLines: 5, lineHeight: N(L.p8.lineHeight, 15) });
-          drawText(pages[7], work, { font, x: N(L.p8.rightColX, 320), y, w: N(L.p8.colW, 240), size: N(L.p8.size, 12), maxLines: 5, lineHeight: N(L.p8.lineHeight, 15) });
+          const leftX  = N(L.p8.leftColX, 30);
+          const rightX = N(L.p8.rightColX, 320);
+          const colW   = N(L.p8.colW, 240);
+          const size   = N(L.p8.size, 12);
+          const lh     = N(L.p8.lineHeight, 15);
+          drawText(pages[7], look, { font, x: leftX,  y, w: colW, size, maxLines: 5, lineHeight: lh });
+          drawText(pages[7], work, { font, x: rightX, y, w: colW, size, maxLines: 5, lineHeight: lh });
           y -= 80; if (y < 70) break;
         }
       }
@@ -331,10 +394,22 @@ export default async function handler(req, res) {
       // P9: Tips (left) + Actions (right)
       if (pages[8] && L.p9) {
         drawPageHeader(9);
-        if (L.p9.tipsHdr) drawText(pages[8], 'Tips',    { font, ...L.p9.tipsHdr });
-        if (L.p9.actsHdr) drawText(pages[8], 'Actions', { font, ...L.p9.actsHdr });
-        if (L.p9.tipsBox) drawList(pages[8], p.tips,    { ...L.p9.tipsBox, ...L.p9.list }, font);
-        if (L.p9.actsBox) drawList(pages[8], p.actions, { ...L.p9.actsBox, ...L.p9.list }, font);
+        if (L.p9.tipsHdr) {
+          const box = resolveBox(pages[8], L.p9.tipsHdr, originTL);
+          drawText(pages[8], 'Tips', { font, ...box });
+        }
+        if (L.p9.actsHdr) {
+          const box = resolveBox(pages[8], L.p9.actsHdr, originTL);
+          drawText(pages[8], 'Actions', { font, ...box });
+        }
+        if (L.p9.tipsBox) {
+          const box = resolveBox(pages[8], L.p9.tipsBox, originTL);
+          drawList(pages[8], p.tips, { ...box, ...L.p9.list }, font);
+        }
+        if (L.p9.actsBox) {
+          const box = resolveBox(pages[8], L.p9.actsBox, originTL);
+          drawList(pages[8], p.actions, { ...box, ...L.p9.list }, font);
+        }
       }
 
       // Optional: draw the small header on P2, P10 if pages exist
