@@ -1,105 +1,130 @@
-/* Build Coach PDF Link — V4 (aligned to coach fill-template)
-   Place AFTER your “splitter” card (which sets workflow.CoachPDF_* vars).
-   Endpoint: https://ctrl-coach-pdf-service.vercel.app/api/fill-template
-   Template: CTRL_Perspective_Assessment_Profile_template_slim_coach.pdf
-*/
-(function buildCoachPdfLinkV4 () {
-  const W = (typeof workflow === 'object' && workflow) || (globalThis.workflow = {});
-  const S = (typeof session  === 'object' && session)  || (globalThis.session  = {});
+// pages/api/fill-template.js
+export const config = { runtime: "nodejs" };
 
-  // Idempotence
-  if (W._coach_building) return;
-  if (W.coachPdfUrl)     return;
-  W._coach_building = true;
+/**
+ * Wrapper that:
+ *  - Accepts POST (JSON) and GET (query) inputs
+ *  - Safely decodes base64 -> JSON
+ *  - Enforces sensible limits & friendly errors
+ *  - Calls your existing core PDF filler with a clean { tpl, data, out }
+ */
+import { URL } from "url";
 
-  // Small helpers
-  const first = (...xs) => xs.find(v => v != null && String(v).trim()) || '';
-  const safe  = (v) => String(v ?? '').trim();
-  const splitBullets = (txt) => {
-    const t = safe(txt);
-    if (!t) return [];
-    // split by newlines or bullets; trim empties
-    return t.split(/\n+|•\s*/g).map(s => s.trim()).filter(Boolean);
-  };
+const MAX_QS_LEN = 8000; // guard for GETs passing through proxies
 
-  // Inputs (your existing variables)
-  const fullName   = first(W?.Pers_PoC_State_Summary?.identity?.fullName, W.FullName, S.FullName, 'Perspective');
-  const dateLbl    = first(W.dateLabel, W.DateLabel);
+function bad(res, code, msg, extra = {}) {
+  res.status(code).json({ ok: false, error: msg, ...extra });
+}
 
-  const dom        = first(W.Dominant_Label, W['p3:dom']);
-  const domchar    = first(W.Dominant_Char,  W['p3:domchar']);
+function ok(res, body) {
+  // If your core returns a Buffer (the PDF), stream it here:
+  if (body && Buffer.isBuffer(body.pdf)) {
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${body.out || "report.pdf"}"`);
+    return res.status(200).send(body.pdf);
+  }
+  // Otherwise return JSON (e.g., a signed URL your app generated)
+  return res.status(200).json({ ok: true, ...body });
+}
 
-  // Long sections from splitter
-  const coachSummary   = safe(W.CoachPDF_coach_summary);   // good candidate for p3:domdesc
-  const spiderdescLong = safe(W.CoachPDF_spiderdesc);
-  const sequenceLong   = safe(W.CoachPDF_sequence);
-  const themepairLong  = safe(W.CoachPDF_themepair);
-  const adaptColLong   = safe(W.CoachPDF_adapt_colleagues);
-  const adaptLdrLong   = safe(W.CoachPDF_adapt_leaders);
-  const tipsLong       = safe(W.CoachPDF_tips);
-  const actionsLong    = safe(W.CoachPDF_actions);
+function decodeB64Json(b64) {
+  const raw = Buffer.from(String(b64 || ""), "base64").toString("utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error("Invalid base64 JSON in 'data' parameter.");
+  }
+}
 
-  // Short prescriptive fields
-  const themePair    = safe(W.themePair);
-  const themeNotes   = safe(W.themeNotes);
+async function getInput(req) {
+  // Support CORS preflight
+  if (req.method === "OPTIONS") return { preflight: true };
 
-  // Lists (tips/actions) – split to arrays
-  const tipsArr    = splitBullets(W.tipsspider || W.tipsdom || tipsLong).slice(0, 8);
-  const actionsArr = splitBullets(W.actionspattern || W.actionstheme || actionsLong).slice(0, 8);
+  // POST path (preferred for large payloads)
+  if (req.method === "POST") {
+    if (!req.headers["content-type"]?.includes("application/json")) {
+      throw Object.assign(new Error("POST body must be application/json."), { status: 415 });
+    }
+    const { tpl, data, out } = req.body || {};
+    if (!tpl) throw Object.assign(new Error("Missing 'tpl'."), { status: 400 });
+    if (!data) throw Object.assign(new Error("Missing 'data' (base64 JSON)."), { status: 400 });
+    const parsed = decodeB64Json(data);
+    return { tpl, out, payload: parsed };
+  }
 
-  // “Work with …” expects array of { look, work }. If you already have structured data, map it here.
-  // For now, seed from your long sections or single strings so the page is never empty.
-  const workwcol = [
-    { look: 'What to notice', work: safe(W['workswith_col_work'] || adaptColLong) }
-  ].filter(p => p.look || p.work).slice(0, 4);
+  // GET path (kept for smoke tests and simple links)
+  if (req.method === "GET") {
+    const fullUrl = new URL(req.url, "http://x");
+    const qs = fullUrl.search || "";
+    if (qs.length > MAX_QS_LEN) {
+      throw Object.assign(
+        new Error(`Query string too long (${qs.length}). Use POST.`),
+        { status: 414 }
+      );
+    }
+    const tpl = fullUrl.searchParams.get("tpl");
+    const dataB64 = fullUrl.searchParams.get("data");
+    const out = fullUrl.searchParams.get("out") || "report.pdf";
+    if (!tpl) throw Object.assign(new Error("Missing 'tpl'."), { status: 400 });
+    if (!dataB64) throw Object.assign(new Error("Missing 'data'."), { status: 400 });
+    const payload = decodeB64Json(dataB64);
+    return { tpl, out, payload };
+  }
 
-  const workwlead = [
-    { look: 'What leaders will notice', work: safe(W['workswith_ldr_work'] || adaptLdrLong) }
-  ].filter(p => p.look || p.work).slice(0, 4);
+  throw Object.assign(new Error(`Method ${req.method} not allowed.`), { status: 405 });
+}
 
-  // Optional chart
-  const chartUrl = first(W['p4:chart'], W.spiderChartUrl, W?.Pers_PoC_State_Summary?.spider?.chartUrl, '');
+/**
+ * 👉 Paste your current PDF generation code inside fillTemplateCore
+ *    and make it return ONE of the following:
+ *      - { pdf: Buffer, out: string }  // stream the PDF back
+ *      - { url: string, out?: string } // return an accessible URL (signed, public, etc.)
+ */
+async function fillTemplateCore({ tpl, out, payload }) {
+  // ==== START of your existing logic ====
+  // Example structure (replace with your current implementation):
+  //
+  // import path from "path";
+  // import fs from "fs/promises";
+  // import { PDFDocument } from "pdf-lib";
+  //
+  // const templatePath = path.join(process.cwd(), "public", "templates", tpl);
+  // const templateBytes = await fs.readFile(templatePath);  // throws if missing
+  // const pdfDoc = await PDFDocument.load(templateBytes);
+  //
+  // // ... write payload fields onto pdfDoc pages ...
+  //
+  // const pdf = await pdfDoc.save();
+  // return { pdf, out };
+  //
+  // If you instead upload to storage (S3/Vercel Blob) and return a link, do:
+  // const url = await uploadSomewhere(pdf);
+  // return { url, out };
+  // ==== END of your existing logic ====
 
-  // Build the EXACT data shape the handler reads
-  const data = {
-    person: { fullName },
-    dateLbl,                     // NOTE: top-level (not inside person)
-    dom,
-    domchar,
-    domdesc: coachSummary,       // p3 body text
-    spiderdesc: spiderdescLong,  // p4 body text
-    seqpat: sequenceLong,        // p5 body text
-    theme: themePair,            // p6 header line
-    themeExpl: themepairLong || themeNotes,  // p6 paragraph
-    workwcol,
-    workwlead,
-    tips: tipsArr,
-    actions: actionsArr,
-    chartUrl
-  };
+  // TEMP safe placeholder so this file runs even before you wire your core:
+  return { url: `/api/_dev-ok?file=${encodeURIComponent(out || "coach.pdf")}` };
+}
 
-  // Encode to base64
-  const toB64 = (obj) => {
-    try { return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64'); }
-    catch { return 'e30='; } // {}
-  };
-  const b64 = toB64(data);
+export default async function handler(req, res) {
+  // CORS (Botpress calls from browser)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
 
-  // Assemble URL
-  const ENDPOINT = 'https://ctrl-coach-pdf-service.vercel.app/api/fill-template';
-  const TPL_FILE = 'CTRL_Perspective_Assessment_Profile_template_slim_coach.pdf';
-  const safeName = String(fullName || 'Perspective').replace(/[^\w.-]+/g, '_');
-  const outName  = `${safeName}_${dateLbl || 'TODAY'}_COACH.pdf`;
+  try {
+    const input = await getInput(req);
+    if (input?.preflight) return res.status(204).end();
 
-  const qs = new URLSearchParams({ tpl: TPL_FILE, data: b64, out: outName }).toString();
-  const url = `${ENDPOINT}?${qs}`;
-
-  // Publish for downstream cards
-  W.coachPdfUrl = url;
-  W.Pers_PoC_CoachPdfLink = url;
-
-  // Quick probe
-  W._coach_link_probe = `coachPdfUrl set · tips=${data.tips.length} · actions=${data.actions.length} · colPairs=${data.workwcol.length} · ldrPairs=${data.workwlead.length}`;
-
-  W._coach_building = false;
-})();
+    const body = await fillTemplateCore(input);
+    if (!body || (typeof body !== "object")) {
+      return bad(res, 500, "Template core returned no result.");
+    }
+    return ok(res, body);
+  } catch (err) {
+    const code = err.status || 500;
+    return bad(res, code, err.message || "Internal error.", {
+      hint: code === 414 ? "Switch to POST with JSON body." : undefined
+    });
+  }
+}
