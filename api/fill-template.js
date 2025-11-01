@@ -6,9 +6,14 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 import fs from "fs/promises";
 import path from "path";
 
-// ───────── helpers ─────────
+/* ───────────────── helpers ───────────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0)  => (Number.isFinite(+v) ? +v : fb);
+
+const pick = (...vals) => {
+  for (const v of vals) if (v != null && String(v).trim() !== "") return String(v).trim();
+  return "";
+};
 
 // Try to import @vercel/blob only if available (keeps it optional)
 async function tryGetBlobPut() {
@@ -29,16 +34,47 @@ async function loadTemplateBytesLocal(name) {
 
 // Map incoming payload into fields your draw calls expect
 function normaliseInput(src = {}) {
+  const person   = src.person || {};
+  const sections = (src.coach && src.coach.sections) || {};
+
   return {
-    // p1
-    name:      S(src?.person?.fullName || src?.name || src?.["p1:n"]),
-    dateLbl:   S(src?.person?.dateLabel || src?.dateLabel || src?.["p1:d"]),
-    // p3
-    domChar:   S(src?.domChar || src?.domchar),
-    domDesc:   S(src?.domDesc || src?.domdesc),
-    // p4
-    spiderdesc: S(src?.spiderdescSection || src?.spider?.desc),
-    chartUrl:   S(src?.spider?.chartUrl), // reserved if you later draw an image
+    /* page 1 */
+    name:    pick(person.fullName, src.FullName, src.name, src["p1:n"]),
+    dateLbl: pick(person.dateLabel, src.DateLabel, src.dateLabel, src["p1:d"]),
+
+    /* dominant + spider meta (available for drawing if needed) */
+    domState:   pick(src.DominantState, src.domState),
+    domChar:    pick(src.DominantCharacter, src.domChar, src.domchar),
+    spiderKey:  pick(src.SpiderKey),
+    spiderFreq: pick(src.SpiderFreq),
+
+    /* narrative used today */
+    domDesc:    pick(
+      src.domDesc, src.domdesc,
+      src.CoachPDF_coach_summary, src.CoachPDF_overview,
+      sections.summary, sections.overview
+    ),
+    spiderdesc: pick(
+      src.spiderdescSection, src.SpiderDesc,
+      sections.spider, src.CoachPDF_spiderdesc
+    ),
+
+    /* extras (ready for future drawText calls) */
+    sequence:     pick(src.Sequence, sections.sequence, src.CoachPDF_sequence),
+    themePair:    pick(src.ThemePair, sections.themepair, src.CoachPDF_themepair, src.Coach_PDF_thempair),
+    themeNotes:   pick(src.ThemeNotes),
+    contextNotes: pick(src.ContextNotes),
+
+    tipsDominant:   pick(src.TipsDominant, sections.tips, src.CoachPDF_tips, src.Coach_PDF_tips),
+    tipsSpider:     pick(src.TipsSpider),
+    actionsPattern: pick(src.ActionsPattern, src.CoachPDF_actions, sections.actions),
+    actionsTheme:   pick(src.ActionsTheme),
+
+    withColWork:  pick(src.WorksWith_Colleagues_Work, sections.withPeers, src.CoachPDF_adapt_colleagues),
+    withLeadWork: pick(src.WorksWith_Leaders_Work,   sections.withLeads, src.CoachPDF_adapt_leaders),
+
+    /* chart image url hook (if you render images later) */
+    chartUrl: pick(src?.spider?.chartUrl)
   };
 }
 
@@ -78,7 +114,7 @@ export default async function handler(req, res) {
     }
 
     // Template & output name (query string only; body stays for data)
-    const q   = req.method === "POST" ? (req.query || {}) : (req.query || {});
+    const q   = req.query || {};
     const tpl = S(q.tpl || "CTRL_Perspective_Assessment_Profile_template_slim_coach.pdf");
     const out = S(q.out || "Coach_Profile.pdf");
 
@@ -93,21 +129,28 @@ export default async function handler(req, res) {
     const pages    = pdfDoc.getPages();
 
     // p1
-    drawTextBox(pages[0], font, P.name,    L.p1.name);
-    drawTextBox(pages[0], font, P.dateLbl, L.p1.date);
+    if (pages[0]) {
+      drawTextBox(pages[0], font, P.name,    L.p1.name);
+      drawTextBox(pages[0], font, P.dateLbl, L.p1.date);
+    }
 
     // p3
-    drawTextBox(pages[2], font, P.domChar, L.p3.domChar);
-    drawTextBox(pages[2], font, P.domDesc, L.p3.domDesc);
+    if (pages[2]) {
+      drawTextBox(pages[2], font, P.domChar, L.p3.domChar);
+      drawTextBox(pages[2], font, P.domDesc, L.p3.domDesc);
+    }
 
     // p4
-    drawTextBox(pages[3], font, P.spiderdesc, L.p4.spider);
+    if (pages[3]) {
+      drawTextBox(pages[3], font, P.spiderdesc, L.p4.spider);
+    }
 
     const outBytes = await pdfDoc.save();
 
     // Prefer: return a short, public URL using Vercel Blob if available
     const put = await tryGetBlobPut();
     if (put) {
+      // On Node 18+, Blob is globally available
       const blob = await put(out, new Blob([outBytes], { type: "application/pdf" }), {
         access: "public",
         addRandomSuffix: true,
