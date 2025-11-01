@@ -159,10 +159,10 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Fallback: stream the PDF inline
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${out}"`);
-    res.status(200).send(Buffer.from(outBytes));
+    // Fallback: return a JSON response with a data: URL (instead of streaming)
+    const b64 = Buffer.from(outBytes).toString("base64");
+    const dataUrl = `data:application/pdf;base64,${b64}`;
+    res.status(200).json({ ok: true, url: dataUrl, name: out, bytes: outBytes.length, tpl });
 
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err?.message || err) });
