@@ -21,7 +21,7 @@ const norm = (v, fb = "") =>
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/[\u2010\u2013\u2014]/g, "-")      // ← added \u2010 here
     .replace(/\u2026/g, "...")
     .replace(/\u00A0/g, " ")
     .replace(/[•·]/g, "-")
@@ -274,7 +274,7 @@ export default async function handler(req, res) {
     if (p8 && P.adapt_leaders) drawTextBox(p8, font, P.adapt_leaders, L.p8.adapt_leaders);
 
     /* ───────────── p9: tips + acts ───────────── */
-    if (p9 && P.tips) drawTextBox(p9, font, P.tips, L.p9.tips);
+    if (p9 && P.tips)    drawTextBox(p9, font, P.tips,    L.p9.tips);
     if (p9 && P.actions) drawTextBox(p9, font, P.actions, L.p9.acts);
 
     /* ───────── output ───────── */
