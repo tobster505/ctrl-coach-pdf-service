@@ -62,21 +62,40 @@ async function readPayload(req) {
 /* TL → simple textbox (does internal TL->BL conversion) */
 function drawTextBox(page, font, text, spec = {}, opts = {}) {
   if (!page) return;
-  const { x=40, y=40, w=540, size=12, lineGap=3, color=rgb(0,0,0), align="left" } = spec;
-  const maxLines = (opts.maxLines ?? spec.maxLines ?? 6);
+  const {
+    x = 40,
+    y = 40,
+    w = 540,
+    size = 12,
+    lineGap = 3,
+    color = rgb(0, 0, 0),
+    align = "left",
+    h,               // optional height for auto maxLines
+  } = spec;
+
+  const lineHeight = Math.max(1, size) + lineGap;
+  const maxLines =
+    opts.maxLines ??
+    spec.maxLines ??
+    (h ? Math.max(1, Math.floor(h / lineHeight)) : 6);
+
   const hard = norm(text || "");
   if (!hard) return;
 
-  const lines = hard.split(/\n/).map(s=>s.trim());
+  const lines = hard.split(/\n/).map((s) => s.trim());
   const wrapped = [];
   const widthOf = (s) => font.widthOfTextAtSize(s, Math.max(1, size));
 
   const wrapLine = (ln) => {
-    const words = ln.split(/\s+/); let cur="";
-    for (let i=0;i<words.length;i++){
+    const words = ln.split(/\s+/);
+    let cur = "";
+    for (let i = 0; i < words.length; i++) {
       const nxt = cur ? `${cur} ${words[i]}` : words[i];
       if (widthOf(nxt) <= w || !cur) cur = nxt;
-      else { wrapped.push(cur); cur = words[i]; }
+      else {
+        wrapped.push(cur);
+        cur = words[i];
+      }
     }
     wrapped.push(cur);
   };
@@ -85,15 +104,21 @@ function drawTextBox(page, font, text, spec = {}, opts = {}) {
   const out = wrapped.slice(0, maxLines);
   const pageH = page.getHeight();
   const baselineY = pageH - y;
-  const lineH = Math.max(1,size) + lineGap;
 
   let yCursor = baselineY;
   for (const ln of out) {
-    let xDraw = x; const wLn = widthOf(ln);
+    let xDraw = x;
+    const wLn = widthOf(ln);
     if (align === "center") xDraw = x + (w - wLn) / 2;
     else if (align === "right") xDraw = x + (w - wLn);
-    page.drawText(ln, { x: xDraw, y: yCursor - size, size: Math.max(1,size), font, color });
-    yCursor -= lineH;
+    page.drawText(ln, {
+      x: xDraw,
+      y: yCursor - size,
+      size: Math.max(1, size),
+      font,
+      color,
+    });
+    yCursor -= lineHeight;
   }
 }
 
@@ -208,29 +233,71 @@ export default async function handler(req, res) {
     const p9  = pageOrNull(pages, 8);
     const p10 = pageOrNull(pages, 9);
 
-    /* ───────────── layout anchors (tweak later) ───────────── */
+    /* ───────────── layout anchors (defaults) ───────────── */
     const L = {
       header:  { x: 380, y: 51, w: 400, size: 13, align: "left", maxLines: 1 },
-      p1:      { name: { x: 7,  y: 473, w: 500, size: 30, align: "center" },
-                 date: { x: 210,y: 600, w: 500, size: 25, align: "left" } },
-      p3:      { overview: { x: 25, y: 585, w: 550, size: 16, align: "left", maxLines: 22 },
-                 summary:  { x: 25, y: 240, w: 550, size: 16, align: "left", maxLines: 12 } },
-      p4:      { spiderdesc: { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 15 },
-                 chart:      { x: 35, y: 235, w: 540, h: 260 } },
-      p5:      { sequence:  { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p6:      { themepair: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p7:      { adapt_colleagues: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p8:      { adapt_leaders:   { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p9:      { tips: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 10 },
-                 acts: { x: 25, y: 300, w: 550, size: 16, align: "left", maxLines: 10 } }
+      p1:      {
+        name: { x: 7,  y: 473, w: 500, size: 30, align: "center" },
+        date: { x: 210,y: 600, w: 500, size: 25, align: "left" }
+      },
+      p3:      {
+        overview: { x: 25, y: 585, w: 550, size: 16, align: "left", maxLines: 22 },
+        summary:  { x: 25, y: 240, w: 550, size: 16, align: "left", maxLines: 12 }
+      },
+      p4:      {
+        spiderdesc: { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 15 },
+        chart:      { x: 35, y: 235, w: 540, h: 260 }
+      },
+      p5:      { sequence:       { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
+      p6:      { themepair:      { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
+      p7:      { adapt_colleagues:{ x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
+      p8:      { adapt_leaders:  { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
+      p9:      {
+        tips: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 10 },
+        acts: { x: 25, y: 300, w: 550, size: 16, align: "left", maxLines: 10 }
+      }
     };
+
+    /* ───────────── dynamic overrides from URL ───────────── */
+
+    // Generic override helper for text boxes
+    const overrideBox = (box, key) => {
+      if (!box) return;
+      if (q[`${key}x`]   != null) box.x        = N(q[`${key}x`],   box.x);
+      if (q[`${key}y`]   != null) box.y        = N(q[`${key}y`],   box.y);
+      if (q[`${key}w`]   != null) box.w        = N(q[`${key}w`],   box.w);
+      if (q[`${key}h`]   != null) box.h        = N(q[`${key}h`],   box.h || 0);
+      if (q[`${key}s`]   != null) box.size     = N(q[`${key}s`],   box.size);
+      if (q[`${key}max`] != null) box.maxLines = N(q[`${key}max`], box.maxLines);
+      if (q[`${key}align`])       box.align    = String(q[`${key}align`]);
+    };
+
+    // Overview (page 3)
+    overrideBox(L.p3.overview, "ov");    // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
+    // Coach summary (page 3)
+    overrideBox(L.p3.summary,  "cs");    // csx, csy, csw, csh, css, csmax, csalign
+    // Spider description (page 4)
+    overrideBox(L.p4.spiderdesc, "sd");  // sdx, sdy, sdw, sdh, sds, sdmax, sdalign
+    // Sequence (page 5)
+    overrideBox(L.p5.sequence, "seq");   // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
+    // Theme pair (page 6)
+    overrideBox(L.p6.themepair, "tp");   // tpx, tpy, tpw, tph, tps, tpmax, tpalign
+    // Adapt with colleagues (page 7)
+    overrideBox(L.p7.adapt_colleagues, "ac"); // acx, acy, acw, ach, acs, acmax, acalign
+    // Adapt with leaders (page 8)
+    overrideBox(L.p8.adapt_leaders, "al");    // alx, aly, alw, alh, als, almax, alalign
+    // Tips (page 9)
+    overrideBox(L.p9.tips, "tips");      // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
+    // Actions (page 9)
+    overrideBox(L.p9.acts, "acts");      // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
 
     /* ───────────── p1: full name & date ───────────── */
     if (p1 && P.name)    drawTextBox(p1, font, P.name,    L.p1.name);
     if (p1 && P.dateLbl) drawTextBox(p1, font, P.dateLbl, L.p1.date);
 
     /* ───────────── page headers (p2..p10) ───────────── */
-    const putHeader = (page) => { if (!page || !P.name) return;
+    const putHeader = (page) => {
+      if (!page || !P.name) return;
       drawTextBox(page, font, P.name, L.header, { maxLines: 1 });
     };
     [p2,p3,p4,p5,p6,p7,p8,p9,p10].forEach(putHeader);
@@ -244,12 +311,20 @@ export default async function handler(req, res) {
     if (p4 && L.p4.chart) {
       let chartUrl = String(P.chartUrl || "");
       if (!chartUrl) {
-        const counts = P.counts ? { C:N(P.counts.C,0), T:N(P.counts.T,0), R:N(P.counts.R,0), L:N(P.counts.L,0) }
-                                : parseCountsFromFreq(P.spiderfreq || "");
-        const sum = N(counts.C,0)+N(counts.T,0)+N(counts.R,0)+N(counts.L,0);
+        const counts = P.counts ? {
+          C: N(P.counts.C, 0),
+          T: N(P.counts.T, 0),
+          R: N(P.counts.R, 0),
+          L: N(P.counts.L, 0)
+        } : parseCountsFromFreq(P.spiderfreq || "");
+        const sum = N(counts.C, 0) + N(counts.T, 0) + N(counts.R, 0) + N(counts.L, 0);
         if (sum > 0) chartUrl = buildSpiderQuickChartUrlFromCounts(counts);
       } else {
-        try { const u = new URL(chartUrl); u.searchParams.set("v", Date.now().toString(36)); chartUrl = u.toString(); } catch {}
+        try {
+          const u = new URL(chartUrl);
+          u.searchParams.set("v", Date.now().toString(36));
+          chartUrl = u.toString();
+        } catch {}
       }
       if (chartUrl) {
         const img = await embedRemoteImage(pdfDoc, chartUrl);
@@ -279,7 +354,9 @@ export default async function handler(req, res) {
 
     /* ───────── output ───────── */
     const bytes = await pdfDoc.save();
-    const outName = S(q.out || `CTRL_${P.name || "Coach"}_${P.dateLbl || ""}.pdf`).replace(/[^\w.-]+/g, "_");
+    const outName = S(
+      q.out || `CTRL_${P.name || "Coach"}_${P.dateLbl || ""}.pdf`
+    ).replace(/[^\w.-]+/g, "_");
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.end(Buffer.from(bytes));
