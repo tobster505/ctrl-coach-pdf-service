@@ -241,8 +241,8 @@ export default async function handler(req, res) {
         date: { x: 210,y: 600, w: 500, size: 25, align: "left" }
       },
       p3:      {
-        overview: { x: 25, y: 585, w: 550, size: 16, align: "left", maxLines: 22 },
-        summary:  { x: 25, y: 240, w: 550, size: 16, align: "left", maxLines: 12 }
+        overview: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 },
+        summary:  { x: 25, y: 280, w: 550, size: 11, align: "left", maxLines: 50 }
       },
       p4:      {
         spiderdesc: { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 15 },
