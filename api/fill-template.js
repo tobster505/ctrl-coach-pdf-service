@@ -246,7 +246,7 @@ export default async function handler(req, res) {
       },
       p4:      {
         spiderdesc: { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 15 },
-        chart:      { x: 35, y: 215, w: 540, h: 230 }
+        chart:      { x: 35, y: 200, w: 540, h: 230 }
       },
       p5:      { sequence:       { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
       p6:      { themepair:      { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
