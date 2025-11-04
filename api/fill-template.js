@@ -301,7 +301,7 @@ export default async function handler(req, res) {
       // p5: frequency + spiderdesc + chart
       p5: {
         freq:  { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 18 },
-        chart: { x: 185, y: 160, w: 420, h: 180 }
+        chart: { x: 285, y: 160, w: 420, h: 180 }
       },
       // p6: sequence
       p6: {
