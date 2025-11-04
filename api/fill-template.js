@@ -291,17 +291,19 @@ export default async function handler(req, res) {
     const font     = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
     const pages = pdfDoc.getPages();
-    const p1  = pageOrNull(pages, 0);
-    const p2  = pageOrNull(pages, 1);
-    const p3  = pageOrNull(pages, 2);
-    const p4  = pageOrNull(pages, 3);
-    const p5  = pageOrNull(pages, 4);
-    const p6  = pageOrNull(pages, 5);
-    const p7  = pageOrNull(pages, 6);
-    const p8  = pageOrNull(pages, 7);
-    const p9  = pageOrNull(pages, 8);
-    const p10 = pageOrNull(pages, 9);
-    const p11 = pageOrNull(pages, 10);  // actions page
+const p1  = pageOrNull(pages, 0);
+const p2  = pageOrNull(pages, 1);
+const p3  = pageOrNull(pages, 2);
+const p4  = pageOrNull(pages, 3);
+const p5  = pageOrNull(pages, 4);
+const p6  = pageOrNull(pages, 5);
+const p7  = pageOrNull(pages, 6);
+const p8  = pageOrNull(pages, 7);
+const p9  = pageOrNull(pages, 8);
+const p10 = pageOrNull(pages, 9);
+const p11 = pageOrNull(pages, 10);  // actions page
+const p12 = pageOrNull(pages, 11);  // extra page (notes, etc.)
+
 
     /* ───────────── layout anchors (defaults) ───────────── */
     const L = {
@@ -415,7 +417,7 @@ export default async function handler(req, res) {
       if (!page || !P.name) return;
       drawTextBox(page, font, P.name, L.header, { maxLines: 1 });
     };
-    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11].forEach(putHeader);
+    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12].forEach(putHeader);
 
     /* ───────────── p3: snapshot_overview ───────────── */
     if (p3 && P.snapshot_overview) {
