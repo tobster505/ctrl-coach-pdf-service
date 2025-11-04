@@ -265,9 +265,19 @@ function drawSnapshotAcrossPages(pTop, pBottom, font, text, specTop, specBottom)
 
   const lineHeight = Math.max(1, size) + lineGap;
   const pageH = pTop.getHeight();
-  const maxLinesTop =
-    specTop?.maxLines ??
-    (h ? Math.max(1, Math.floor(h / lineHeight)) : Math.max(1, Math.floor((pageH - y) / lineHeight)));
+
+  // physical limit given the page + y / h
+  const physicalLimit = h
+    ? Math.max(1, Math.floor(h / lineHeight))
+    : Math.max(1, Math.floor((pageH - y) / lineHeight));
+
+  // optional logical cap (maxLines from specTop / csmax)
+  const declaredLimit =
+    specTop && typeof specTop.maxLines === "number"
+      ? Math.max(1, specTop.maxLines)
+      : Infinity;
+
+  const maxLinesTop = Math.min(physicalLimit, declaredLimit);
 
   const rawLines = hard.split(/\n/).map((s) => s.trim());
   const wrapped = [];
