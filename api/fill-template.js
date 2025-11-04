@@ -2,7 +2,7 @@
  * CTRL Coach Export Service · fill-template (Coach flow)
  * Path: /pages/api/fill-template.js  (ctrl-coach-pdf-service)
  *
- * NEW Layout:
+ * Layout:
  *   p1: name/date (cover)
  *   p2: name header only
  *   p3: snapshot_overview        (from snapshot_summary)
@@ -241,21 +241,15 @@ export default async function handler(req, res) {
     const src   = await readPayload(req);
 
     // expected payload (from Build_CoachPDF_Link):
-    // person.fullName, dateLbl,
-    // snapshot_summary, overview, spiderdesc,
-    // seqpat/sequence, themepair,
-    // adapt_colleagues, adapt_leaders,
-    // tips, actions,
-    // counts?, spiderfreq?, chartUrl?
     const P = {
       name:             norm(src?.person?.fullName || src?.fullName || "Perspective"),
       dateLbl:          norm(src?.dateLbl || ""),
 
-      // NEW: separate snapshot vs summary
+      // snapshot summary vs overview
       snapshot_overview: norm(src?.snapshot_summary || src?.snapshot_overview || ""),
       summary:           norm(src?.overview || src?.coach_summary || ""),
 
-      // NEW: frequency text (with fallback to spiderfreq string)
+      // frequency & spider
       freqText:         norm(src?.frequency || src?.freq || src?.spiderfreq || ""),
       spiderdesc:       norm(src?.spiderdesc || ""),
 
@@ -287,7 +281,7 @@ export default async function handler(req, res) {
     const p8  = pageOrNull(pages, 7);
     const p9  = pageOrNull(pages, 8);
     const p10 = pageOrNull(pages, 9);
-    const p11 = pageOrNull(pages, 10);  // NEW: actions page
+    const p11 = pageOrNull(pages, 10);  // actions page
 
     /* ───────────── layout anchors (defaults) ───────────── */
     const L = {
@@ -300,7 +294,7 @@ export default async function handler(req, res) {
       p3: {
         snapshot: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
       },
-      // p4: summary
+      // p4: summary (overview)
       p4: {
         summary: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
       },
@@ -336,8 +330,6 @@ export default async function handler(req, res) {
     };
 
     /* ───────────── dynamic overrides from URL ───────────── */
-
-    // Generic override helper for text boxes
     const overrideBox = (box, key) => {
       if (!box) return;
       if (q[`${key}x`]   != null) box.x        = N(q[`${key}x`],   box.x);
@@ -349,35 +341,43 @@ export default async function handler(req, res) {
       if (q[`${key}align`])       box.align    = String(q[`${key}align`]);
     };
 
-    // Snapshot overview (page 3) — keep old "ov" prefix for familiarity
-    overrideBox(L.p3.snapshot, "ov");     // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
+    // Mapping requested:
+    // snapshot_summary → cs*
+    // overview         → ov*
+    // spiderdesc       → sd*
+    // sequence         → seq*
+    // themepair        → tp*
+    // adapt_colleagues → ac*
+    // adapt_leaders    → al*
+    // tips             → tips*
+    // actions          → acts*
 
-    // Summary (page 4) — keep old "cs" prefix
-    overrideBox(L.p4.summary, "cs");      // csx, csy, csw, csh, css, csmax, csalign
+    // snapshot_summary (page 3)
+    overrideBox(L.p3.snapshot, "cs");      // csx, csy, csw, csh, css, csmax, csalign
 
-    // Frequency + spiderdesc (page 5)
-    overrideBox(L.p5.freq, "freq");       // freqx, freqy, freqw, freqh, freqs, freqmax, freqalign
+    // overview / summary (page 4)
+    overrideBox(L.p4.summary, "ov");       // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
 
-    // Chart (page 5) — same keys as before
-    overrideBox(L.p5.chart, "chart");     // chartx, charty, chartw, charth
+    // spiderdesc (page 5) – use sd* for the combined freq+spiderdesc block
+    overrideBox(L.p5.freq, "sd");          // sdx, sdy, sdw, sdh, sds, sdmax, sdalign
 
-    // Sequence (page 6)
-    overrideBox(L.p6.sequence, "seq");    // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
+    // sequence (page 6)
+    overrideBox(L.p6.sequence, "seq");     // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
 
-    // Theme pair (page 7)
-    overrideBox(L.p7.themepair, "tp");    // tpx, tpy, tpw, tph, tps, tpmax, tpalign
+    // themepair (page 7)
+    overrideBox(L.p7.themepair, "tp");     // tpx, tpy, tpw, tph, tps, tpmax, tpalign
 
-    // Adapt with colleagues (page 8)
+    // adapt_colleagues (page 8)
     overrideBox(L.p8.adapt_colleagues, "ac"); // acx, acy, acw, ach, acs, acmax, acalign
 
-    // Adapt with leaders (page 9)
+    // adapt_leaders (page 9)
     overrideBox(L.p9.adapt_leaders, "al");    // alx, aly, alw, alh, als, almax, alalign
 
-    // Tips (page 10)
-    overrideBox(L.p10.tips, "tips");      // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
+    // tips (page 10)
+    overrideBox(L.p10.tips, "tips");       // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
 
-    // Actions (page 11)
-    overrideBox(L.p11.acts, "acts");      // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
+    // actions (page 11)
+    overrideBox(L.p11.acts, "acts");       // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
 
     /* ───────────── p1: full name & date ───────────── */
     if (p1 && P.name)    drawTextBox(p1, font, P.name,    L.p1.name);
@@ -395,14 +395,13 @@ export default async function handler(req, res) {
       drawTextBox(p3, font, P.snapshot_overview, L.p3.snapshot);
     }
 
-    /* ───────────── p4: summary ───────────── */
+    /* ───────────── p4: summary / overview ───────────── */
     if (p4 && P.summary) {
       drawTextBox(p4, font, P.summary, L.p4.summary);
     }
 
     /* ───────────── p5: frequency + spiderdesc + chart ───────────── */
     if (p5) {
-      // Build a combined frequency + descriptive block
       const freqParts = [];
       if (P.freqText) {
         freqParts.push(P.freqText);
@@ -425,7 +424,6 @@ export default async function handler(req, res) {
         drawTextBox(p5, font, combined, L.p5.freq);
       }
 
-      // Chart (same logic as before, but on p5)
       if (L.p5.chart) {
         let chartUrl = String(P.chartUrl || "");
         if (!chartUrl) {
