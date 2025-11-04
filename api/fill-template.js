@@ -228,6 +228,26 @@ async function embedRemoteImage(pdfDoc, url) {
   } catch { return null; }
 }
 
+/* NEW: split long text into top few sentences + bottom remainder (used by p5 only) */
+function splitTopBottom(text, maxTopSentences = 2) {
+  const clean = norm(text || "");
+  if (!clean) return { top: "", bottom: "" };
+
+  const sentenceRegex = /[^.!?]+[.!?]+(\s+|$)/g;
+  const sentences = [];
+  let m;
+  while ((m = sentenceRegex.exec(clean)) !== null) {
+    sentences.push(m[0].trim());
+  }
+  if (sentences.length === 0) {
+    return { top: clean, bottom: "" };
+  }
+
+  const top = sentences.slice(0, maxTopSentences).join(" ");
+  const bottom = clean.slice(top.length).trim();
+  return { top, bottom };
+}
+
 /* safe page getter */
 const pageOrNull = (pages, idx0) => (pages[idx0] ?? null);
 
@@ -298,10 +318,27 @@ export default async function handler(req, res) {
       p4: {
         summary: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
       },
-      // p5: frequency + spiderdesc + chart
+      // p5: frequency + spiderdesc + chart  (UPDATED)
       p5: {
-        freq:  { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 18 },
-        chart: { x: 275, y: 160, w: 380, h: 180 }
+        // top-left narrow block (intro sentences) beside chart
+        freqTop: {
+          x: 25,
+          y: 160,
+          w: 260,
+          size: 11,
+          align: "left",
+          maxLines: 12
+        },
+        // full-width block underneath (remainder)
+        freqBottom: {
+          x: 25,
+          y: 360,
+          w: 550,
+          size: 11,
+          align: "left",
+          maxLines: 40
+        },
+        chart: { x: 330, y: 160, w: 250, h: 180 } // unchanged logic, right side
       },
       // p6: sequence
       p6: {
@@ -341,25 +378,15 @@ export default async function handler(req, res) {
       if (q[`${key}align`])       box.align    = String(q[`${key}align`]);
     };
 
-    // Mapping requested:
-    // snapshot_summary → cs*
-    // overview         → ov*
-    // spiderdesc       → sd*
-    // sequence         → seq*
-    // themepair        → tp*
-    // adapt_colleagues → ac*
-    // adapt_leaders    → al*
-    // tips             → tips*
-    // actions          → acts*
-
     // snapshot_summary (page 3)
     overrideBox(L.p3.snapshot, "cs");      // csx, csy, csw, csh, css, csmax, csalign
 
     // overview / summary (page 4)
     overrideBox(L.p4.summary, "ov");       // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
 
-    // spiderdesc (page 5) – use sd* for the combined freq+spiderdesc block
-    overrideBox(L.p5.freq, "sd");          // sdx, sdy, sdw, sdh, sds, sdmax, sdalign
+    // p5: frequency/spiderdesc split
+    overrideBox(L.p5.freqTop,    "sd");    // sdx, sdy, sdw, sds, sdmax, sdalign
+    overrideBox(L.p5.freqBottom, "sdb");   // sdbx, sdby, sdbw, sdbs, sdbmax, sdba lign
 
     // sequence (page 6)
     overrideBox(L.p6.sequence, "seq");     // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
@@ -400,7 +427,7 @@ export default async function handler(req, res) {
       drawTextBox(p4, font, P.summary, L.p4.summary);
     }
 
-    /* ───────────── p5: frequency + spiderdesc + chart ───────────── */
+    /* ───────────── p5: frequency + spiderdesc + chart (UPDATED) ───────────── */
     if (p5) {
       const freqParts = [];
       if (P.freqText) {
@@ -421,7 +448,9 @@ export default async function handler(req, res) {
       const combined = [freqText, P.spiderdesc].filter(Boolean).join("\n\n");
 
       if (combined) {
-        drawTextBox(p5, font, combined, L.p5.freq);
+        const { top, bottom } = splitTopBottom(combined, 2); // 2 sentences beside chart
+        if (top)    drawTextBox(p5, font, top,    L.p5.freqTop);
+        if (bottom) drawTextBox(p5, font, bottom, L.p5.freqBottom);
       }
 
       if (L.p5.chart) {
