@@ -242,7 +242,7 @@ export default async function handler(req, res) {
       },
       p3:      {
         overview: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 },
-        summary:  { x: 25, y: 280, w: 550, size: 11, align: "left", maxLines: 50 }
+        summary:  { x: 25, y: 480, w: 550, size: 11, align: "left", maxLines: 50 }
       },
       p4:      {
         spiderdesc: { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 15 },
