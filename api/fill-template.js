@@ -6,8 +6,8 @@
  *   p1: name/date (cover)
  *   p2: name header only
  *   p3: snapshot_overview        (from snapshot_summary)
- *   p4: summary                  (from overview)
- *   p5: frequency + spiderdesc   (plus chart)
+ *   p4: summary                  (from overview) + snapshot overflow (top)
+ *   p5: frequency + spiderdesc   (plus chart, split top/bottom)
  *   p6: sequence
  *   p7: themepair
  *   p8: adapt_colleagues
@@ -228,7 +228,7 @@ async function embedRemoteImage(pdfDoc, url) {
   } catch { return null; }
 }
 
-/* NEW: split long text into top few sentences + bottom remainder (used by p5 only) */
+/* Split long frequency text into "top few sentences" + remainder (p5) */
 function splitTopBottom(text, maxTopSentences = 2) {
   const clean = norm(text || "");
   if (!clean) return { top: "", bottom: "" };
@@ -246,6 +246,69 @@ function splitTopBottom(text, maxTopSentences = 2) {
   const top = sentences.slice(0, maxTopSentences).join(" ");
   const bottom = clean.slice(top.length).trim();
   return { top, bottom };
+}
+
+/* NEW: draw snapshot across p3 and p4 (overflow goes to p4) */
+function drawSnapshotAcrossPages(pTop, pBottom, font, text, specTop, specBottom) {
+  if (!pTop) return;
+  const hard = norm(text || "");
+  if (!hard) return;
+
+  const {
+    x = 40,
+    y = 40,
+    w = 540,
+    size = 12,
+    lineGap = 3,
+    h
+  } = specTop || {};
+
+  const lineHeight = Math.max(1, size) + lineGap;
+  const pageH = pTop.getHeight();
+  const maxLinesTop =
+    specTop?.maxLines ??
+    (h ? Math.max(1, Math.floor(h / lineHeight)) : Math.max(1, Math.floor((pageH - y) / lineHeight)));
+
+  const rawLines = hard.split(/\n/).map((s) => s.trim());
+  const wrapped = [];
+  const widthOf = (s) => font.widthOfTextAtSize(s, Math.max(1, size));
+
+  const wrapLine = (ln) => {
+    const words = ln.split(/\s+/);
+    let cur = "";
+    for (let i = 0; i < words.length; i++) {
+      const nxt = cur ? `${cur} ${words[i]}` : words[i];
+      if (widthOf(nxt) <= w || !cur) cur = nxt;
+      else {
+        wrapped.push(cur);
+        cur = words[i];
+      }
+    }
+    wrapped.push(cur);
+  };
+  for (const ln of rawLines) wrapLine(ln);
+
+  const topLines = wrapped.slice(0, maxLinesTop);
+  const restLines = wrapped.slice(maxLinesTop);
+
+  if (topLines.length) {
+    drawTextBox(
+      pTop,
+      font,
+      topLines.join("\n"),
+      specTop,
+      { maxLines: maxLinesTop }
+    );
+  }
+
+  if (pBottom && specBottom && restLines.length) {
+    drawTextBox(
+      pBottom,
+      font,
+      restLines.join("\n"),
+      specBottom
+    );
+  }
 }
 
 /* safe page getter */
@@ -291,19 +354,18 @@ export default async function handler(req, res) {
     const font     = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
     const pages = pdfDoc.getPages();
-const p1  = pageOrNull(pages, 0);
-const p2  = pageOrNull(pages, 1);
-const p3  = pageOrNull(pages, 2);
-const p4  = pageOrNull(pages, 3);
-const p5  = pageOrNull(pages, 4);
-const p6  = pageOrNull(pages, 5);
-const p7  = pageOrNull(pages, 6);
-const p8  = pageOrNull(pages, 7);
-const p9  = pageOrNull(pages, 8);
-const p10 = pageOrNull(pages, 9);
-const p11 = pageOrNull(pages, 10);  // actions page
-const p12 = pageOrNull(pages, 11);  // extra page (notes, etc.)
-
+    const p1  = pageOrNull(pages, 0);
+    const p2  = pageOrNull(pages, 1);
+    const p3  = pageOrNull(pages, 2);
+    const p4  = pageOrNull(pages, 3);
+    const p5  = pageOrNull(pages, 4);
+    const p6  = pageOrNull(pages, 5);
+    const p7  = pageOrNull(pages, 6);
+    const p8  = pageOrNull(pages, 7);
+    const p9  = pageOrNull(pages, 8);
+    const p10 = pageOrNull(pages, 9);
+    const p11 = pageOrNull(pages, 10);
+    const p12 = pageOrNull(pages, 11);  // extra page if present
 
     /* ───────────── layout anchors (defaults) ───────────── */
     const L = {
@@ -316,11 +378,12 @@ const p12 = pageOrNull(pages, 11);  // extra page (notes, etc.)
       p3: {
         snapshot: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
       },
-      // p4: summary (overview)
+      // p4: snapshot overflow (top) + summary (below)
       p4: {
-        summary: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
+        snapshotCont: { x: 25, y: 120, w: 550, size: 11, align: "left", maxLines: 24 },
+        summary:      { x: 25, y: 360, w: 550, size: 11, align: "left", maxLines: 30 }
       },
-      // p5: frequency + spiderdesc + chart  (UPDATED)
+      // p5: frequency + spiderdesc + chart  (split)
       p5: {
         // top-left narrow block (intro sentences) beside chart
         freqTop: {
@@ -340,7 +403,7 @@ const p12 = pageOrNull(pages, 11);  // extra page (notes, etc.)
           align: "left",
           maxLines: 40
         },
-        chart: { x: 330, y: 160, w: 250, h: 180 } // unchanged logic, right side
+        chart: { x: 330, y: 160, w: 250, h: 180 }
       },
       // p6: sequence
       p6: {
@@ -386,9 +449,9 @@ const p12 = pageOrNull(pages, 11);  // extra page (notes, etc.)
     // overview / summary (page 4)
     overrideBox(L.p4.summary, "ov");       // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
 
-    // p5: frequency/spiderdesc split
+    // p5 frequency/spiderdesc split
     overrideBox(L.p5.freqTop,    "sd");    // sdx, sdy, sdw, sds, sdmax, sdalign
-    overrideBox(L.p5.freqBottom, "sdb");   // sdbx, sdby, sdbw, sdbs, sdbmax, sdba lign
+    overrideBox(L.p5.freqBottom, "sdb");   // sdbx, sdby, sdbw, sdbs, sdbmax, sdbalign
 
     // sequence (page 6)
     overrideBox(L.p6.sequence, "seq");     // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
@@ -412,16 +475,23 @@ const p12 = pageOrNull(pages, 11);  // extra page (notes, etc.)
     if (p1 && P.name)    drawTextBox(p1, font, P.name,    L.p1.name);
     if (p1 && P.dateLbl) drawTextBox(p1, font, P.dateLbl, L.p1.date);
 
-    /* ───────────── page headers (p2..p11) ───────────── */
+    /* ───────────── page headers (p2..p12) ───────────── */
     const putHeader = (page) => {
       if (!page || !P.name) return;
       drawTextBox(page, font, P.name, L.header, { maxLines: 1 });
     };
     [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12].forEach(putHeader);
 
-    /* ───────────── p3: snapshot_overview ───────────── */
-    if (p3 && P.snapshot_overview) {
-      drawTextBox(p3, font, P.snapshot_overview, L.p3.snapshot);
+    /* ───────────── p3 + p4: snapshot_overview (with overflow) ───────────── */
+    if (P.snapshot_overview) {
+      drawSnapshotAcrossPages(
+        p3,
+        p4,
+        font,
+        P.snapshot_overview,
+        L.p3.snapshot,
+        L.p4.snapshotCont
+      );
     }
 
     /* ───────────── p4: summary / overview ───────────── */
@@ -429,7 +499,7 @@ const p12 = pageOrNull(pages, 11);  // extra page (notes, etc.)
       drawTextBox(p4, font, P.summary, L.p4.summary);
     }
 
-    /* ───────────── p5: frequency + spiderdesc + chart (UPDATED) ───────────── */
+    /* ───────────── p5: frequency + spiderdesc + chart (split) ───────────── */
     if (p5) {
       const freqParts = [];
       if (P.freqText) {
