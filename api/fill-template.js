@@ -1,8 +1,21 @@
 /**
  * CTRL Coach Export Service · fill-template (Coach flow)
  * Path: /pages/api/fill-template.js  (ctrl-coach-pdf-service)
- * Layout: p1 name/date; p2 name header; p3 overview+coach_summary; p4 spiderdesc (+chart);
- *         p5 sequence; p6 themepair; p7 adapt_colleagues; p8 adapt_leaders; p9 tips+acts; p10 name header.
+ *
+ * NEW Layout:
+ *   p1: name/date (cover)
+ *   p2: name header only
+ *   p3: snapshot_overview        (from snapshot_summary)
+ *   p4: summary                  (from overview)
+ *   p5: frequency + spiderdesc   (plus chart)
+ *   p6: sequence
+ *   p7: themepair
+ *   p8: adapt_colleagues
+ *   p9: adapt_leaders
+ *   p10: tips
+ *   p11: actions / acts
+ *
+ * Header: full name appears on pages 2–11.
  */
 export const config = { runtime: "nodejs" };
 
@@ -21,7 +34,7 @@ const norm = (v, fb = "") =>
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2010\u2013\u2014]/g, "-")      // ← added \u2010 here
+    .replace(/[\u2010\u2013\u2014]/g, "-")      // hyphens
     .replace(/\u2026/g, "...")
     .replace(/\u00A0/g, " ")
     .replace(/[•·]/g, "-")
@@ -157,12 +170,43 @@ function parseCountsFromFreq(freqStr = "", fb = {C:0,T:0,R:0,L:0}) {
   return out;
 }
 function buildSpiderQuickChartUrlFromCounts(counts) {
-  const theme = { stroke:"#4B2E83", fill:"rgba(75,46,131,0.22)", point:"#4B2E83", grid:"rgba(0,0,0,0.14)", labels:"#555" };
+  const theme = {
+    stroke:"#4B2E83",
+    fill:"rgba(75,46,131,0.22)",
+    point:"#4B2E83",
+    grid:"rgba(0,0,0,0.14)",
+    labels:"#555"
+  };
   const data = [N(counts.C,0), N(counts.T,0), N(counts.R,0), N(counts.L,0)];
   const cfg = {
     type:"radar",
-    data:{ labels:["Concealed","Triggered","Regulated","Lead"], datasets:[{ label:"CTRL", data, fill:true, borderColor:theme.stroke, backgroundColor:theme.fill, pointBackgroundColor:theme.point, pointBorderColor:"#fff", borderWidth:4, pointRadius:4, pointBorderWidth:2 }] },
-    options:{ plugins:{legend:{display:false}}, scales:{ r:{ min:0, max:5, ticks:{ stepSize:1, color:theme.labels, font:{size:12}}, grid:{color:theme.grid, circular:true}, pointLabels:{ font:{ size:18, weight:"700"}, color:theme.labels } } } }
+    data:{
+      labels:["Concealed","Triggered","Regulated","Lead"],
+      datasets:[{
+        label:"CTRL",
+        data,
+        fill:true,
+        borderColor:theme.stroke,
+        backgroundColor:theme.fill,
+        pointBackgroundColor:theme.point,
+        pointBorderColor:"#fff",
+        borderWidth:4,
+        pointRadius:4,
+        pointBorderWidth:2
+      }]
+    },
+    options:{
+      plugins:{legend:{display:false}},
+      scales:{
+        r:{
+          min:0,
+          max:5,
+          ticks:{ stepSize:1, color:theme.labels, font:{size:12}},
+          grid:{color:theme.grid, circular:true},
+          pointLabels:{ font:{ size:18, weight:"700"}, color:theme.labels }
+        }
+      }
+    }
   };
   const u = new URL("https://quickchart.io/chart");
   u.searchParams.set("c", JSON.stringify(cfg));
@@ -196,21 +240,32 @@ export default async function handler(req, res) {
     const tpl   = S(q.tpl || defaultTpl).replace(/[^A-Za-z0-9._-]/g, "");
     const src   = await readPayload(req);
 
-    // expected payload (from your Build_CoachPDF_Link card):
-    // person.fullName, dateLbl, overview, coach_summary, spiderdesc, sequence,
-    // themepair, adapt_colleagues, adapt_leaders, tips, actions, counts? spiderfreq? chartUrl?
+    // expected payload (from Build_CoachPDF_Link):
+    // person.fullName, dateLbl,
+    // snapshot_summary, overview, spiderdesc,
+    // seqpat/sequence, themepair,
+    // adapt_colleagues, adapt_leaders,
+    // tips, actions,
+    // counts?, spiderfreq?, chartUrl?
     const P = {
       name:             norm(src?.person?.fullName || src?.fullName || "Perspective"),
       dateLbl:          norm(src?.dateLbl || ""),
-      overview:         norm(src?.overview),
-      coach_summary:    norm(src?.coach_summary),
-      spiderdesc:       norm(src?.spiderdesc),
+
+      // NEW: separate snapshot vs summary
+      snapshot_overview: norm(src?.snapshot_summary || src?.snapshot_overview || ""),
+      summary:           norm(src?.overview || src?.coach_summary || ""),
+
+      // NEW: frequency text (with fallback to spiderfreq string)
+      freqText:         norm(src?.frequency || src?.freq || src?.spiderfreq || ""),
+      spiderdesc:       norm(src?.spiderdesc || ""),
+
       sequence:         norm(src?.sequence || src?.seqpat || ""),
       themepair:        norm(src?.themepair),
       adapt_colleagues: norm(src?.adapt_colleagues),
       adapt_leaders:    norm(src?.adapt_leaders),
       tips:             norm(src?.tips),
       actions:          norm(src?.actions),
+
       counts:           (src?.counts && typeof src.counts === "object") ? src.counts : null,
       spiderfreq:       norm(src?.spiderfreq || ""),
       chartUrl:         S(src?.chartUrl || "")
@@ -232,29 +287,51 @@ export default async function handler(req, res) {
     const p8  = pageOrNull(pages, 7);
     const p9  = pageOrNull(pages, 8);
     const p10 = pageOrNull(pages, 9);
+    const p11 = pageOrNull(pages, 10);  // NEW: actions page
 
     /* ───────────── layout anchors (defaults) ───────────── */
     const L = {
-      header:  { x: 380, y: 51, w: 400, size: 13, align: "left", maxLines: 1 },
+      header:  { x: 380, y: 51,  w: 400, size: 13, align: "left", maxLines: 1 },
       p1:      {
-        name: { x: 7,  y: 473, w: 500, size: 30, align: "center" },
-        date: { x: 210,y: 600, w: 500, size: 25, align: "left" }
+        name: { x: 7,   y: 473, w: 500, size: 30, align: "center" },
+        date: { x: 210, y: 600, w: 500, size: 25, align: "left" }
       },
-      p3:      {
-        overview: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 },
-        summary:  { x: 25, y: 480, w: 550, size: 11, align: "left", maxLines: 50 }
+      // p3: snapshot_overview
+      p3: {
+        snapshot: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
       },
-      p4:      {
-        spiderdesc: { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 15 },
-        chart:      { x: 35, y: 180, w: 540, h: 180 }
+      // p4: summary
+      p4: {
+        summary: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
       },
-      p5:      { sequence:       { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p6:      { themepair:      { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p7:      { adapt_colleagues:{ x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p8:      { adapt_leaders:  { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 } },
-      p9:      {
-        tips: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 10 },
-        acts: { x: 25, y: 300, w: 550, size: 16, align: "left", maxLines: 10 }
+      // p5: frequency + spiderdesc + chart
+      p5: {
+        freq:  { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 18 },
+        chart: { x: 35, y: 180, w: 540, h: 180 }
+      },
+      // p6: sequence
+      p6: {
+        sequence: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+      },
+      // p7: themepair
+      p7: {
+        themepair: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+      },
+      // p8: adapt_colleagues
+      p8: {
+        adapt_colleagues: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+      },
+      // p9: adapt_leaders
+      p9: {
+        adapt_leaders: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+      },
+      // p10: tips
+      p10: {
+        tips: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 16 }
+      },
+      // p11: actions
+      p11: {
+        acts: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 16 }
       }
     };
 
@@ -272,85 +349,141 @@ export default async function handler(req, res) {
       if (q[`${key}align`])       box.align    = String(q[`${key}align`]);
     };
 
-    // Overview (page 3)
-    overrideBox(L.p3.overview, "ov");    // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
-    // Coach summary (page 3)
-    overrideBox(L.p3.summary,  "cs");    // csx, csy, csw, csh, css, csmax, csalign
-    // Spider description (page 4)
-    overrideBox(L.p4.spiderdesc, "sd");  // sdx, sdy, sdw, sdh, sds, sdmax, sdalign
-    // Sequence (page 5)
-    overrideBox(L.p5.sequence, "seq");   // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
-    // Theme pair (page 6)
-    overrideBox(L.p6.themepair, "tp");   // tpx, tpy, tpw, tph, tps, tpmax, tpalign
-    // Adapt with colleagues (page 7)
-    overrideBox(L.p7.adapt_colleagues, "ac"); // acx, acy, acw, ach, acs, acmax, acalign
-    // Adapt with leaders (page 8)
-    overrideBox(L.p8.adapt_leaders, "al");    // alx, aly, alw, alh, als, almax, alalign
-    // Tips (page 9)
-    overrideBox(L.p9.tips, "tips");      // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
-    // Actions (page 9)
-    overrideBox(L.p9.acts, "acts");      // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
+    // Snapshot overview (page 3) — keep old "ov" prefix for familiarity
+    overrideBox(L.p3.snapshot, "ov");     // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
+
+    // Summary (page 4) — keep old "cs" prefix
+    overrideBox(L.p4.summary, "cs");      // csx, csy, csw, csh, css, csmax, csalign
+
+    // Frequency + spiderdesc (page 5)
+    overrideBox(L.p5.freq, "freq");       // freqx, freqy, freqw, freqh, freqs, freqmax, freqalign
+
+    // Chart (page 5) — same keys as before
+    overrideBox(L.p5.chart, "chart");     // chartx, charty, chartw, charth
+
+    // Sequence (page 6)
+    overrideBox(L.p6.sequence, "seq");    // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
+
+    // Theme pair (page 7)
+    overrideBox(L.p7.themepair, "tp");    // tpx, tpy, tpw, tph, tps, tpmax, tpalign
+
+    // Adapt with colleagues (page 8)
+    overrideBox(L.p8.adapt_colleagues, "ac"); // acx, acy, acw, ach, acs, acmax, acalign
+
+    // Adapt with leaders (page 9)
+    overrideBox(L.p9.adapt_leaders, "al");    // alx, aly, alw, alh, als, almax, alalign
+
+    // Tips (page 10)
+    overrideBox(L.p10.tips, "tips");      // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
+
+    // Actions (page 11)
+    overrideBox(L.p11.acts, "acts");      // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
 
     /* ───────────── p1: full name & date ───────────── */
     if (p1 && P.name)    drawTextBox(p1, font, P.name,    L.p1.name);
     if (p1 && P.dateLbl) drawTextBox(p1, font, P.dateLbl, L.p1.date);
 
-    /* ───────────── page headers (p2..p10) ───────────── */
+    /* ───────────── page headers (p2..p11) ───────────── */
     const putHeader = (page) => {
       if (!page || !P.name) return;
       drawTextBox(page, font, P.name, L.header, { maxLines: 1 });
     };
-    [p2,p3,p4,p5,p6,p7,p8,p9,p10].forEach(putHeader);
+    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11].forEach(putHeader);
 
-    /* ───────────── p3: overview + coach_summary ───────────── */
-    if (p3 && P.overview)      drawTextBox(p3, font, P.overview,      L.p3.overview);
-    if (p3 && P.coach_summary) drawTextBox(p3, font, P.coach_summary, L.p3.summary);
+    /* ───────────── p3: snapshot_overview ───────────── */
+    if (p3 && P.snapshot_overview) {
+      drawTextBox(p3, font, P.snapshot_overview, L.p3.snapshot);
+    }
 
-    /* ───────────── p4: spiderdesc (+ optional chart) ───────────── */
-    if (p4 && P.spiderdesc) drawTextBox(p4, font, P.spiderdesc, L.p4.spiderdesc);
-    if (p4 && L.p4.chart) {
-      let chartUrl = String(P.chartUrl || "");
-      if (!chartUrl) {
-        const counts = P.counts ? {
+    /* ───────────── p4: summary ───────────── */
+    if (p4 && P.summary) {
+      drawTextBox(p4, font, P.summary, L.p4.summary);
+    }
+
+    /* ───────────── p5: frequency + spiderdesc + chart ───────────── */
+    if (p5) {
+      // Build a combined frequency + descriptive block
+      const freqParts = [];
+      if (P.freqText) {
+        freqParts.push(P.freqText);
+      } else if (P.spiderfreq) {
+        freqParts.push(P.spiderfreq);
+      } else if (P.counts) {
+        const c = {
           C: N(P.counts.C, 0),
           T: N(P.counts.T, 0),
           R: N(P.counts.R, 0),
           L: N(P.counts.L, 0)
-        } : parseCountsFromFreq(P.spiderfreq || "");
-        const sum = N(counts.C, 0) + N(counts.T, 0) + N(counts.R, 0) + N(counts.L, 0);
-        if (sum > 0) chartUrl = buildSpiderQuickChartUrlFromCounts(counts);
-      } else {
-        try {
-          const u = new URL(chartUrl);
-          u.searchParams.set("v", Date.now().toString(36));
-          chartUrl = u.toString();
-        } catch {}
+        };
+        freqParts.push(`Frequency · C: ${c.C} · T: ${c.T} · R: ${c.R} · L: ${c.L}`);
       }
-      if (chartUrl) {
-        const img = await embedRemoteImage(pdfDoc, chartUrl);
-        if (img) {
-          const H = p4.getHeight();
-          const { x, y, w, h } = L.p4.chart;
-          p4.drawImage(img, { x, y: H - y - h, width: w, height: h });
+
+      const freqText = freqParts.join(" ");
+      const combined = [freqText, P.spiderdesc].filter(Boolean).join("\n\n");
+
+      if (combined) {
+        drawTextBox(p5, font, combined, L.p5.freq);
+      }
+
+      // Chart (same logic as before, but on p5)
+      if (L.p5.chart) {
+        let chartUrl = String(P.chartUrl || "");
+        if (!chartUrl) {
+          const counts = P.counts ? {
+            C: N(P.counts.C, 0),
+            T: N(P.counts.T, 0),
+            R: N(P.counts.R, 0),
+            L: N(P.counts.L, 0)
+          } : parseCountsFromFreq(P.spiderfreq || "");
+          const sum = N(counts.C, 0) + N(counts.T, 0) + N(counts.R, 0) + N(counts.L, 0);
+          if (sum > 0) chartUrl = buildSpiderQuickChartUrlFromCounts(counts);
+        } else {
+          try {
+            const u = new URL(chartUrl);
+            u.searchParams.set("v", Date.now().toString(36));
+            chartUrl = u.toString();
+          } catch {}
+        }
+        if (chartUrl) {
+          const img = await embedRemoteImage(pdfDoc, chartUrl);
+          if (img) {
+            const H = p5.getHeight();
+            const { x, y, w, h } = L.p5.chart;
+            p5.drawImage(img, { x, y: H - y - h, width: w, height: h });
+          }
         }
       }
     }
 
-    /* ───────────── p5: sequence ───────────── */
-    if (p5 && P.sequence) drawTextBox(p5, font, P.sequence, L.p5.sequence);
+    /* ───────────── p6: sequence ───────────── */
+    if (p6 && P.sequence) {
+      drawTextBox(p6, font, P.sequence, L.p6.sequence);
+    }
 
-    /* ───────────── p6: themepair ───────────── */
-    if (p6 && P.themepair) drawTextBox(p6, font, P.themepair, L.p6.themepair);
+    /* ───────────── p7: themepair ───────────── */
+    if (p7 && P.themepair) {
+      drawTextBox(p7, font, P.themepair, L.p7.themepair);
+    }
 
-    /* ───────────── p7: adapt_colleagues ───────────── */
-    if (p7 && P.adapt_colleagues) drawTextBox(p7, font, P.adapt_colleagues, L.p7.adapt_colleagues);
+    /* ───────────── p8: adapt_colleagues ───────────── */
+    if (p8 && P.adapt_colleagues) {
+      drawTextBox(p8, font, P.adapt_colleagues, L.p8.adapt_colleagues);
+    }
 
-    /* ───────────── p8: adapt_leaders ───────────── */
-    if (p8 && P.adapt_leaders) drawTextBox(p8, font, P.adapt_leaders, L.p8.adapt_leaders);
+    /* ───────────── p9: adapt_leaders ───────────── */
+    if (p9 && P.adapt_leaders) {
+      drawTextBox(p9, font, P.adapt_leaders, L.p9.adapt_leaders);
+    }
 
-    /* ───────────── p9: tips + acts ───────────── */
-    if (p9 && P.tips)    drawTextBox(p9, font, P.tips,    L.p9.tips);
-    if (p9 && P.actions) drawTextBox(p9, font, P.actions, L.p9.acts);
+    /* ───────────── p10: tips ───────────── */
+    if (p10 && P.tips) {
+      drawTextBox(p10, font, P.tips, L.p10.tips);
+    }
+
+    /* ───────────── p11: actions ───────────── */
+    if (p11 && P.actions) {
+      drawTextBox(p11, font, P.actions, L.p11.acts);
+    }
 
     /* ───────── output ───────── */
     const bytes = await pdfDoc.save();
