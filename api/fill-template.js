@@ -6,8 +6,8 @@
  *   p1: name/date (cover)
  *   p2: name header only
  *   p3: snapshot_overview        (from snapshot_summary)
- *   p4: summary                  (from overview) + snapshot overflow (top)
- *   p5: frequency + spiderdesc   (plus chart, split top/bottom)
+ *   p4: summary                  (from overview)
+ *   p5: frequency + spiderdesc   (plus chart)
  *   p6: sequence
  *   p7: themepair
  *   p8: adapt_colleagues
@@ -34,7 +34,7 @@ const norm = (v, fb = "") =>
     .normalize("NFKC")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2010\u2013\u2014]/g, "-")      // hyphens
+    .replace(/[\u2010-\u2014]/g, "-")
     .replace(/\u2026/g, "...")
     .replace(/\u00A0/g, " ")
     .replace(/[•·]/g, "-")
@@ -66,8 +66,9 @@ async function readPayload(req) {
   const q = req.method === "POST" ? (req.body || {}) : (req.query || {});
   if (q.data) return parseDataParam(q.data);
   if (req.method === "POST" && !q.data) {
-    try { return typeof req.json === "function" ? await req.json() : (req.body || {}); }
-    catch { /* fallthrough */ }
+    try {
+      return typeof req.json === "function" ? await req.json() : (req.body || {});
+    } catch { /* fallthrough */ }
   }
   return {};
 }
@@ -228,99 +229,6 @@ async function embedRemoteImage(pdfDoc, url) {
   } catch { return null; }
 }
 
-/* Split long frequency text into "top few sentences" + remainder (p5) */
-function splitTopBottom(text, maxTopSentences = 2) {
-  const clean = norm(text || "");
-  if (!clean) return { top: "", bottom: "" };
-
-  const sentenceRegex = /[^.!?]+[.!?]+(\s+|$)/g;
-  const sentences = [];
-  let m;
-  while ((m = sentenceRegex.exec(clean)) !== null) {
-    sentences.push(m[0].trim());
-  }
-  if (sentences.length === 0) {
-    return { top: clean, bottom: "" };
-  }
-
-  const top = sentences.slice(0, maxTopSentences).join(" ");
-  const bottom = clean.slice(top.length).trim();
-  return { top, bottom };
-}
-
-/* NEW: draw snapshot across p3 and p4 (overflow goes to p4) */
-function drawSnapshotAcrossPages(pTop, pBottom, font, text, specTop, specBottom) {
-  if (!pTop) return;
-  const hard = norm(text || "");
-  if (!hard) return;
-
-  const {
-    x = 40,
-    y = 40,
-    w = 540,
-    size = 12,
-    lineGap = 3,
-    h
-  } = specTop || {};
-
-  const lineHeight = Math.max(1, size) + lineGap;
-  const pageH = pTop.getHeight();
-
-  // physical limit given the page + y / h
-  const physicalLimit = h
-    ? Math.max(1, Math.floor(h / lineHeight))
-    : Math.max(1, Math.floor((pageH - y) / lineHeight));
-
-  // optional logical cap (maxLines from specTop / csmax)
-  const declaredLimit =
-    specTop && typeof specTop.maxLines === "number"
-      ? Math.max(1, specTop.maxLines)
-      : Infinity;
-
-  const maxLinesTop = Math.min(physicalLimit, declaredLimit);
-
-  const rawLines = hard.split(/\n/).map((s) => s.trim());
-  const wrapped = [];
-  const widthOf = (s) => font.widthOfTextAtSize(s, Math.max(1, size));
-
-  const wrapLine = (ln) => {
-    const words = ln.split(/\s+/);
-    let cur = "";
-    for (let i = 0; i < words.length; i++) {
-      const nxt = cur ? `${cur} ${words[i]}` : words[i];
-      if (widthOf(nxt) <= w || !cur) cur = nxt;
-      else {
-        wrapped.push(cur);
-        cur = words[i];
-      }
-    }
-    wrapped.push(cur);
-  };
-  for (const ln of rawLines) wrapLine(ln);
-
-  const topLines = wrapped.slice(0, maxLinesTop);
-  const restLines = wrapped.slice(maxLinesTop);
-
-  if (topLines.length) {
-    drawTextBox(
-      pTop,
-      font,
-      topLines.join("\n"),
-      specTop,
-      { maxLines: maxLinesTop }
-    );
-  }
-
-  if (pBottom && specBottom && restLines.length) {
-    drawTextBox(
-      pBottom,
-      font,
-      restLines.join("\n"),
-      specBottom
-    );
-  }
-}
-
 /* safe page getter */
 const pageOrNull = (pages, idx0) => (pages[idx0] ?? null);
 
@@ -374,8 +282,7 @@ export default async function handler(req, res) {
     const p8  = pageOrNull(pages, 7);
     const p9  = pageOrNull(pages, 8);
     const p10 = pageOrNull(pages, 9);
-    const p11 = pageOrNull(pages, 10);
-    const p12 = pageOrNull(pages, 11);  // extra page if present
+    const p11 = pageOrNull(pages, 10);  // actions page
 
     /* ───────────── layout anchors (defaults) ───────────── */
     const L = {
@@ -386,58 +293,40 @@ export default async function handler(req, res) {
       },
       // p3: snapshot_overview
       p3: {
-        snapshot: { x: 25, y: 150, w: 550, size: 11, align: "left", maxLines: 50 }
+        snapshot: { x: 25, y: 150, w: 550, size: 14, align: "left", maxLines: 100 }
       },
-      // p4: snapshot overflow (top) + summary (below)
+      // p4: summary (overview)
       p4: {
-        snapshotCont: { x: 25, y: 120, w: 550, size: 11, align: "left", maxLines: 24 },
-        summary:      { x: 25, y: 360, w: 550, size: 11, align: "left", maxLines: 30 }
+        summary: { x: 25, y: 150, w: 530, size: 13, align: "left", maxLines: 100 }
       },
-      // p5: frequency + spiderdesc + chart  (split)
+      // p5: frequency + spiderdesc + chart
       p5: {
-        // top-left narrow block (intro sentences) beside chart
-        freqTop: {
-          x: 25,
-          y: 160,
-          w: 260,
-          size: 11,
-          align: "left",
-          maxLines: 12
-        },
-        // full-width block underneath (remainder)
-        freqBottom: {
-          x: 25,
-          y: 360,
-          w: 550,
-          size: 11,
-          align: "left",
-          maxLines: 40
-        },
-        chart: { x: 330, y: 160, w: 250, h: 180 }
+        freq:  { x: 25, y: 150, w: 260, size: 14, align: "left", maxLines: 100 },
+        chart: { x: 275, y: 160, w: 380, h: 180 }
       },
       // p6: sequence
       p6: {
-        sequence: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+        sequence: { x: 25, y: 160, w: 550, size: 15, align: "left", maxLines: 500 }
       },
       // p7: themepair
       p7: {
-        themepair: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+        themepair: { x: 25, y: 300, w: 550, size: 14, align: "left", maxLines: 50 }
       },
       // p8: adapt_colleagues
       p8: {
-        adapt_colleagues: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+        adapt_colleagues: { x: 25, y: 180, w: 550, size: 14, align: "left", maxLines: 50 }
       },
       // p9: adapt_leaders
       p9: {
-        adapt_leaders: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 20 }
+        adapt_leaders: { x: 25, y: 180, w: 550, size: 14, align: "left", maxLines: 50 }
       },
       // p10: tips
       p10: {
-        tips: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 16 }
+        tips: { x: 25, y: 160, w: 550, size: 15, align: "left", maxLines: 50 }
       },
       // p11: actions
       p11: {
-        acts: { x: 25, y: 560, w: 550, size: 16, align: "left", maxLines: 16 }
+        acts: { x: 25, y: 160, w: 550, size: 15, align: "left", maxLines: 50 }
       }
     };
 
@@ -453,55 +342,56 @@ export default async function handler(req, res) {
       if (q[`${key}align`])       box.align    = String(q[`${key}align`]);
     };
 
-    // snapshot_summary (page 3)
-    overrideBox(L.p3.snapshot, "cs");      // csx, csy, csw, csh, css, csmax, csalign
+    // Snapshot overview (page 3) — now uses `cs*` (snapshot_summary)
+    overrideBox(L.p3.snapshot, "cs");     // csx, csy, csw, csh, css, csmax, csalign
+    // Backwards-compat: still honour old `ov*` params if present
+    overrideBox(L.p3.snapshot, "ov");     // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
 
-    // overview / summary (page 4)
-    overrideBox(L.p4.summary, "ov");       // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
+    // Summary (page 4) — now uses `ov*` (overview)
+    overrideBox(L.p4.summary, "ov");      // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
+    // Backwards-compat: also accept legacy `cs*`
+    overrideBox(L.p4.summary, "cs");      // csx, csy, csw, csh, css, csmax, csalign
 
-    // p5 frequency/spiderdesc split
-    overrideBox(L.p5.freqTop,    "sd");    // sdx, sdy, sdw, sds, sdmax, sdalign
-    overrideBox(L.p5.freqBottom, "sdb");   // sdbx, sdby, sdbw, sdbs, sdbmax, sdbalign
+    // Frequency + spiderdesc (page 5) — primary key `sd*`
+    overrideBox(L.p5.freq, "sd");         // sdx, sdy, sdw, sdh, sds, sdmax, sdalign
+    // Backwards-compat: keep old `freq*` keys too
+    overrideBox(L.p5.freq, "freq");       // freqx, freqy, freqw, freqh, freqs, freqmax, freqalign
 
-    // sequence (page 6)
-    overrideBox(L.p6.sequence, "seq");     // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
+    // Chart (page 5) — same keys as before
+    overrideBox(L.p5.chart, "chart");     // chartx, charty, chartw, charth
 
-    // themepair (page 7)
-    overrideBox(L.p7.themepair, "tp");     // tpx, tpy, tpw, tph, tps, tpmax, tpalign
+    // Sequence (page 6)
+    overrideBox(L.p6.sequence, "seq");    // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
 
-    // adapt_colleagues (page 8)
+    // Theme pair (page 7)
+    overrideBox(L.p7.themepair, "tp");    // tpx, tpy, tpw, tph, tps, tpmax, tpalign
+
+    // Adapt colleagues (page 8)
     overrideBox(L.p8.adapt_colleagues, "ac"); // acx, acy, acw, ach, acs, acmax, acalign
 
-    // adapt_leaders (page 9)
+    // Adapt leaders (page 9)
     overrideBox(L.p9.adapt_leaders, "al");    // alx, aly, alw, alh, als, almax, alalign
 
-    // tips (page 10)
-    overrideBox(L.p10.tips, "tips");       // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
+    // Tips (page 10)
+    overrideBox(L.p10.tips, "tips");      // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
 
-    // actions (page 11)
-    overrideBox(L.p11.acts, "acts");       // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
+    // Actions (page 11)
+    overrideBox(L.p11.acts, "acts");      // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
 
     /* ───────────── p1: full name & date ───────────── */
     if (p1 && P.name)    drawTextBox(p1, font, P.name,    L.p1.name);
     if (p1 && P.dateLbl) drawTextBox(p1, font, P.dateLbl, L.p1.date);
 
-    /* ───────────── page headers (p2..p12) ───────────── */
+    /* ───────────── page headers (p2..p11) ───────────── */
     const putHeader = (page) => {
       if (!page || !P.name) return;
       drawTextBox(page, font, P.name, L.header, { maxLines: 1 });
     };
-    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12].forEach(putHeader);
+    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11].forEach(putHeader);
 
-    /* ───────────── p3 + p4: snapshot_overview (with overflow) ───────────── */
-    if (P.snapshot_overview) {
-      drawSnapshotAcrossPages(
-        p3,
-        p4,
-        font,
-        P.snapshot_overview,
-        L.p3.snapshot,
-        L.p4.snapshotCont
-      );
+    /* ───────────── p3: snapshot_overview ───────────── */
+    if (p3 && P.snapshot_overview) {
+      drawTextBox(p3, font, P.snapshot_overview, L.p3.snapshot);
     }
 
     /* ───────────── p4: summary / overview ───────────── */
@@ -509,7 +399,7 @@ export default async function handler(req, res) {
       drawTextBox(p4, font, P.summary, L.p4.summary);
     }
 
-    /* ───────────── p5: frequency + spiderdesc + chart (split) ───────────── */
+    /* ───────────── p5: frequency + spiderdesc + chart ───────────── */
     if (p5) {
       const freqParts = [];
       if (P.freqText) {
@@ -530,9 +420,7 @@ export default async function handler(req, res) {
       const combined = [freqText, P.spiderdesc].filter(Boolean).join("\n\n");
 
       if (combined) {
-        const { top, bottom } = splitTopBottom(combined, 2); // 2 sentences beside chart
-        if (top)    drawTextBox(p5, font, top,    L.p5.freqTop);
-        if (bottom) drawTextBox(p5, font, bottom, L.p5.freqBottom);
+        drawTextBox(p5, font, combined, L.p5.freq);
       }
 
       if (L.p5.chart) {
@@ -603,6 +491,8 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.end(Buffer.from(bytes));
   } catch (err) {
-    res.status(400).json({ ok:false, error:`fill-template error: ${err?.message || String(err)}` });
+    res
+      .status(400)
+      .json({ ok: false, error: `fill-template error: ${err?.message || String(err)}` });
   }
 }
