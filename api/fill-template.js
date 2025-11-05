@@ -299,10 +299,11 @@ export default async function handler(req, res) {
       p4: {
         summary: { x: 25, y: 150, w: 530, size: 13, align: "left", maxLines: 100 }
       },
-      // p5: frequency + spiderdesc + chart
+      // p5: frequency + spiderdesc split + chart
       p5: {
-        freq:  { x: 25, y: 150, w: 260, size: 14, align: "left", maxLines: 100 },
-        chart: { x: 275, y: 160, w: 380, h: 180 }
+        top:    { x: 25, y: 150, w: 260, size: 14, align: "left", maxLines: 100 }, // sd*
+        bottom: { x: 25, y: 385, w: 550, size: 14, align: "left", maxLines: 50  }, // sdb*
+        chart:  { x: 275, y: 160, w: 380, h: 180 }
       },
       // p6: sequence
       p6: {
@@ -342,41 +343,41 @@ export default async function handler(req, res) {
       if (q[`${key}align`])       box.align    = String(q[`${key}align`]);
     };
 
-    // Snapshot overview (page 3) — now uses `cs*` (snapshot_summary)
-    overrideBox(L.p3.snapshot, "cs");     // csx, csy, csw, csh, css, csmax, csalign
-    // Backwards-compat: still honour old `ov*` params if present
-    overrideBox(L.p3.snapshot, "ov");     // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
+    // Snapshot overview (page 3) — `cs*`
+    overrideBox(L.p3.snapshot, "cs");
+    // Backwards-compat: also honour `ov*` for p3
+    overrideBox(L.p3.snapshot, "ov");
 
-    // Summary (page 4) — now uses `ov*` (overview)
-    overrideBox(L.p4.summary, "ov");      // ovx, ovy, ovw, ovh, ovs, ovmax, ovalign
-    // Backwards-compat: also accept legacy `cs*`
-    overrideBox(L.p4.summary, "cs");      // csx, csy, csw, csh, css, csmax, csalign
+    // Summary (page 4) — `ov*`
+    overrideBox(L.p4.summary, "ov");
+    // Backwards-compat: also accept `cs*`
+    overrideBox(L.p4.summary, "cs");
 
-    // Frequency + spiderdesc (page 5) — primary key `sd*`
-    overrideBox(L.p5.freq, "sd");         // sdx, sdy, sdw, sdh, sds, sdmax, sdalign
-    // Backwards-compat: keep old `freq*` keys too
-    overrideBox(L.p5.freq, "freq");       // freqx, freqy, freqw, freqh, freqs, freqmax, freqalign
-
-    // Chart (page 5) — same keys as before
-    overrideBox(L.p5.chart, "chart");     // chartx, charty, chartw, charth
+    // p5 split: top block uses `sd*`, bottom block uses `sdb*`
+    overrideBox(L.p5.top,    "sd");   // sdx, sdy, sdw, sds, sdmax, sdalign
+    overrideBox(L.p5.bottom, "sdb");  // sdbx, sdby, sdbw, sdbs, sdbmax, sdbalign
+    // Backwards-compat: old `freq*` overrides top block
+    overrideBox(L.p5.top, "freq");
+    // Chart box
+    overrideBox(L.p5.chart, "chart");
 
     // Sequence (page 6)
-    overrideBox(L.p6.sequence, "seq");    // seqx, seqy, seqw, seqh, seqs, seqmax, seqalign
+    overrideBox(L.p6.sequence, "seq");
 
     // Theme pair (page 7)
-    overrideBox(L.p7.themepair, "tp");    // tpx, tpy, tpw, tph, tps, tpmax, tpalign
+    overrideBox(L.p7.themepair, "tp");
 
     // Adapt colleagues (page 8)
-    overrideBox(L.p8.adapt_colleagues, "ac"); // acx, acy, acw, ach, acs, acmax, acalign
+    overrideBox(L.p8.adapt_colleagues, "ac");
 
     // Adapt leaders (page 9)
-    overrideBox(L.p9.adapt_leaders, "al");    // alx, aly, alw, alh, als, almax, alalign
+    overrideBox(L.p9.adapt_leaders, "al");
 
     // Tips (page 10)
-    overrideBox(L.p10.tips, "tips");      // tipsx, tipsy, tipsw, tipsh, tipss, tipsmax, tipsalign
+    overrideBox(L.p10.tips, "tips");
 
     // Actions (page 11)
-    overrideBox(L.p11.acts, "acts");      // actsx, actsy, actsw, actsh, actss, actsmax, actsalign
+    overrideBox(L.p11.acts, "acts");
 
     /* ───────────── p1: full name & date ───────────── */
     if (p1 && P.name)    drawTextBox(p1, font, P.name,    L.p1.name);
@@ -401,6 +402,7 @@ export default async function handler(req, res) {
 
     /* ───────────── p5: frequency + spiderdesc + chart ───────────── */
     if (p5) {
+      // Build the main frequency text
       const freqParts = [];
       if (P.freqText) {
         freqParts.push(P.freqText);
@@ -415,14 +417,32 @@ export default async function handler(req, res) {
         };
         freqParts.push(`Frequency · C: ${c.C} · T: ${c.T} · R: ${c.R} · L: ${c.L}`);
       }
-
       const freqText = freqParts.join(" ");
-      const combined = [freqText, P.spiderdesc].filter(Boolean).join("\n\n");
 
-      if (combined) {
-        drawTextBox(p5, font, combined, L.p5.freq);
+      // Split spiderdesc into top + bottom by first blank line
+      let spiderTop = "";
+      let spiderBottom = "";
+      if (P.spiderdesc) {
+        const parts = P.spiderdesc.split(/\n\s*\n/);
+        if (parts.length === 1) {
+          spiderBottom = parts[0];
+        } else {
+          spiderTop = parts[0];
+          spiderBottom = parts.slice(1).join("\n\n");
+        }
       }
 
+      const topCombined    = [freqText, spiderTop].filter(Boolean).join("\n\n");
+      const bottomCombined = spiderBottom;
+
+      if (topCombined) {
+        drawTextBox(p5, font, topCombined, L.p5.top);
+      }
+      if (bottomCombined) {
+        drawTextBox(p5, font, bottomCombined, L.p5.bottom);
+      }
+
+      // Chart
       if (L.p5.chart) {
         let chartUrl = String(P.chartUrl || "");
         if (!chartUrl) {
@@ -493,6 +513,6 @@ export default async function handler(req, res) {
   } catch (err) {
     res
       .status(400)
-      .json({ ok: false, error: `fill-template error: ${err?.message || String(err)}` });
+      .json({ ok:false, error:`fill-template error: ${err?.message || String(err)}` });
   }
 }
