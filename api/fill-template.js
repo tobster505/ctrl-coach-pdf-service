@@ -312,7 +312,7 @@ export default async function handler(req, res) {
       },
       // p7: themepair
       p7: {
-        themepair: { x: 25, y: 300, w: 550, size: 14, align: "left", maxLines: 50 }
+        themepair: { x: 25, y: 270, w: 550, size: 14, align: "left", maxLines: 50 }
       },
       // p8: adapt_colleagues
       p8: {
