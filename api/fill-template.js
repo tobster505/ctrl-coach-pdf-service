@@ -388,7 +388,7 @@ export default async function handler(req, res) {
       if (!page || !P.name) return;
       drawTextBox(page, font, P.name, L.header, { maxLines: 1 });
     };
-    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11].forEach(putHeader);
+    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12].forEach(putHeader);
 
     /* ───────────── p3: snapshot_overview ───────────── */
     if (p3 && P.snapshot_overview) {
