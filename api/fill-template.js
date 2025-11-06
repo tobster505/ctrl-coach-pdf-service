@@ -298,17 +298,17 @@ export default async function handler(req, res) {
       },
       // p4: summary (overview)
       p4: {
-        summary: { x: 25, y: 150, w: 530, size: 11, align: "left", maxLines: 100 }
+        summary: { x: 25, y: 150, w: 530, size: 13, align: "left", maxLines: 100 }
       },
       // p5: frequency + spiderdesc split + chart
       p5: {
         top:    { x: 25, y: 150, w: 310, size: 12, align: "left", maxLines: 100 }, // sd*
-        bottom: { x: 25, y: 440, w: 550, size: 12, align: "left", maxLines: 50  }, // sdb* (y updated)
+        bottom: { x: 25, y: 480, w: 550, size: 12, align: "left", maxLines: 50  }, // sdb* (y updated)
         chart:  { x: 275, y: 160, w: 380, h: 180 }
       },
       // p6: sequence
       p6: {
-        sequence: { x: 25, y: 160, w: 550, size: 15, align: "left", maxLines: 500 }
+        sequence: { x: 25, y: 160, w: 550, size: 13, align: "left", maxLines: 500 }
       },
       // p7: themepair
       p7: {
