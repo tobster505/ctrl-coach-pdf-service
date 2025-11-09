@@ -47,6 +47,8 @@ const norm = (v, fb = "") =>
     .replace(/[\u200B-\u200D\u2060]/g, "")
     .replace(/[\uD800-\uDFFF]/g, "")
     .replace(/[\uE000-\uF8FF]/g, "")
+    // strip any prompt markers like <<<SPIDERDESC>>> or <<< /ACTS >>>
+    .replace(/<<<[^>]*>>>/g, "")
     // tidy
     .replace(/\t/g, " ").replace(/\r\n?/g, "\n")
     .replace(/[ \f\v]+/g, " ").replace(/[ \t]+\n/g, "\n").trim();
@@ -111,7 +113,7 @@ function drawTextBox(page, font, text, spec = {}, opts = {}) {
         cur = words[i];
       }
     }
-    wrapped.push(cur);
+    if (cur) wrapped.push(cur);
   };
   for (const ln of lines) wrapLine(ln);
 
@@ -302,8 +304,10 @@ export default async function handler(req, res) {
       },
       // p5: frequency + spiderdesc split + chart
       p5: {
-        top:    { x: 25, y: 150, w: 310, size: 12, align: "left", maxLines: 100 }, // sd*
-        bottom: { x: 25, y: 480, w: 550, size: 12, align: "left", maxLines: 50  }, // sdb* (y updated)
+        // TOP: frequency + 2–3 sentence intro (limited, fairly tight)
+        top:    { x: 25, y: 150, w: 310, size: 12, align: "left", maxLines: 12, lineGap: 3 },
+        // BOTTOM: narrative + TL;DR + coach questions (more lines + extra spacing)
+        bottom: { x: 25, y: 480, w: 550, size: 12, align: "left", maxLines: 20, lineGap: 4 },
         chart:  { x: 275, y: 160, w: 380, h: 180 }
       },
       // p6: sequence
@@ -426,8 +430,10 @@ export default async function handler(req, res) {
       if (P.spiderdesc) {
         const parts = P.spiderdesc.split(/\n\s*\n/);
         if (parts.length === 1) {
+          // no explicit blank line → treat everything as bottom narrative
           spiderBottom = parts[0];
         } else {
+          // intro (2–3 sentences) → top; everything else (narrative + TL;DR + questions) → bottom
           spiderTop = parts[0];
           spiderBottom = parts.slice(1).join("\n\n");
         }
