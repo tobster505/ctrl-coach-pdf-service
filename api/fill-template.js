@@ -1,12 +1,10 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V3 · 12 templates + chart + 3 act boxes + QUESTION BOXES)
+ * CTRL Coach Export Service · fill-template (COACH V4 · 12 templates + chart + 3 act boxes + QUESTION BOXES)
  *
- * Based on: COACH V2
- * V3 changes:
- * - Adds support for coach question keys (exec_summary_q1.., ctrl_overview_q1.., etc.)
- * - Renders questions as bullet points (• prefix added here)
- * - Adds layout coordinates for each question so they can be shifted via URL overrides
- * - Fixes secondKey fallback in computeDomAndSecondKeys call
+ * Based on: COACH V3
+ * V4 changes (ONLY):
+ * - Adds WinAnsi-safe normalisation to prevent "WinAnsi cannot encode" crashes (e.g., U+2010 hyphen)
+ * - Applies normalisation in wrapText, drawTextBox, and bulletQ
  */
 
 export const config = { runtime: "nodejs" };
@@ -28,6 +26,36 @@ const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
   catch { return { _error: "Could not serialise debug object" }; }
+}
+
+/* ───────── WinAnsi-safe text normaliser (V4) ───────── */
+function winAnsiSafe(input) {
+  let s = String(input ?? "");
+
+  // Hyphens / dashes
+  s = s
+    .replace(/\u2010/g, "-")  // ‐ hyphen
+    .replace(/\u2011/g, "-")  // non-breaking hyphen
+    .replace(/\u2012/g, "-")  // figure dash
+    .replace(/\u2013/g, "-")  // en dash
+    .replace(/\u2014/g, "-")  // em dash
+    .replace(/\u2212/g, "-"); // minus sign
+
+  // Quotes
+  s = s
+    .replace(/\u2018|\u2019|\u201A|\u201B/g, "'") // ‘ ’ ‚ ‛
+    .replace(/\u201C|\u201D|\u201E|\u201F/g, '"'); // “ ” „ ‟
+
+  // Ellipsis
+  s = s.replace(/\u2026/g, "..."); // …
+
+  // Spaces
+  s = s
+    .replace(/\u00A0/g, " ") // non-breaking space
+    .replace(/\u2007/g, " ")
+    .replace(/\u202F/g, " ");
+
+  return s;
 }
 
 /* ───────── filename helpers ───────── */
@@ -79,7 +107,7 @@ function makeOutputFilename(fullName, dateLbl) {
 
 /* ───────── text wrapping + drawing ───────── */
 function wrapText(font, text, size, w) {
-  const raw = S(text);
+  const raw = winAnsiSafe(S(text)); // V4
   const paragraphs = raw.split("\n");
   const lines = [];
   for (const para of paragraphs) {
@@ -100,7 +128,7 @@ function wrapText(font, text, size, w) {
 
 function drawTextBox(page, font, text, box, opts = {}) {
   if (!page || !font || !box) return;
-  const t0 = S(text);
+  const t0 = winAnsiSafe(S(text)); // V4
   if (!t0.trim()) return;
 
   const pageH = page.getHeight();
@@ -496,9 +524,8 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
 
 /* ───────── question formatter (BULLET POINTS) ───────── */
 function bulletQ(s) {
-  const t = S(s).replace(/\r/g, "").trim();
+  const t = winAnsiSafe(S(s)).replace(/\r/g, "").trim(); // V4
   if (!t) return "";
-  // If user already starts with a bullet, keep it tidy
   if (t.startsWith("•")) return norm(t);
   return `• ${norm(t)}`;
 }
