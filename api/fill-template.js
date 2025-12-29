@@ -1,10 +1,12 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V2 · 12 templates + chart + 3 act boxes)
+ * CTRL Coach Export Service · fill-template (COACH V3 · 12 templates + chart + 3 act boxes + QUESTION BOXES)
  *
- * Based on: COACH V1
- * V2 change:
- * - Template naming updated to:
- *   public/CTRL_PoC_Coach_Assessment_Profile_template_XX.pdf
+ * Based on: COACH V2
+ * V3 changes:
+ * - Adds support for coach question keys (exec_summary_q1.., ctrl_overview_q1.., etc.)
+ * - Renders questions as bullet points (• prefix added here)
+ * - Adds layout coordinates for each question so they can be shifted via URL overrides
+ * - Fixes secondKey fallback in computeDomAndSecondKeys call
  */
 
 export const config = { runtime: "nodejs" };
@@ -14,7 +16,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-/* ───────── template naming (COACH V2) ───────── */
+/* ───────── template naming (COACH) ───────── */
 const TEMPLATE_PREFIX = "CTRL_PoC_Coach_Assessment_Profile_template_";
 
 /* ───────────── small utils ───────────── */
@@ -263,6 +265,7 @@ function computeDomAndSecondKeys(P) {
 }
 
 /* ───────── chart embed (UNCHANGED) ───────── */
+// (kept exactly as your V2)
 function makeSpiderChartUrl12(bandsRaw) {
   const keys = [
     "C_low","C_mid","C_high",
@@ -373,7 +376,7 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT (UNCHANGED from V12.3) ───────── */
+/* ───────── DEFAULT LAYOUT ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
@@ -419,6 +422,36 @@ const DEFAULT_LAYOUT = {
       act2: { x: 100, y: 530, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
       act3: { x: 50,  y: 670, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
     },
+
+    /* ───────── NEW: Coach questions layout blocks ───────── */
+
+    // Page 3: Exec Summary (4 questions)
+    p3Q: {
+      exec_q1: { x: 25, y: 1010, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
+      exec_q2: { x: 25, y: 1050, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
+      exec_q3: { x: 25, y: 1090, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
+      exec_q4: { x: 25, y: 1130, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
+    },
+
+    // Page 4: Overview (2 questions)
+    p4Q: {
+      ov_q1: { x: 25, y: 920, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
+      ov_q2: { x: 25, y: 960, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
+    },
+
+    // Page 5: Deep dive (2) + Themes (2)
+    p5Q: {
+      dd_q1: { x: 25, y: 830, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+      dd_q2: { x: 25, y: 870, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+      th_q1: { x: 25, y: 910, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+      th_q2: { x: 25, y: 950, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+    },
+
+    // Page 6: Adapt questions (colleagues + leaders)
+    p6Q: {
+      col_q1:  { x: 30, y: 760, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+      lead_q1: { x: 30, y: 800, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+    },
   },
 };
 
@@ -461,6 +494,15 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
   return { applied, ignored, layoutPages };
 }
 
+/* ───────── question formatter (BULLET POINTS) ───────── */
+function bulletQ(s) {
+  const t = S(s).replace(/\r/g, "").trim();
+  if (!t) return "";
+  // If user already starts with a bullet, keep it tidy
+  if (t.startsWith("•")) return norm(t);
+  return `• ${norm(t)}`;
+}
+
 /* ───────── input normaliser (COACH) ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
@@ -485,7 +527,10 @@ function normaliseInput(d = {}) {
   const adaptC = S(text.adapt_with_colleagues || "");
   const adaptL = S(text.adapt_with_leaders || "");
 
-  const [a1, a2, a3] = splitToThreeChunks(S(text.actions || ""));
+  // Actions now come as Act1/2/3 in your payload too, but keep fallback
+  const act1 = S(d.Act1 || text.actions1 || "");
+  const act2 = S(d.Act2 || text.actions2 || "");
+  const act3 = S(d.Act3 || text.actions3 || "");
 
   const chartUrl =
     S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
@@ -509,6 +554,26 @@ function normaliseInput(d = {}) {
     themes_para1: thA,
     themes_para2: thB,
 
+    // NEW: questions, bullet formatted
+    exec_q1: bulletQ(text.exec_summary_q1),
+    exec_q2: bulletQ(text.exec_summary_q2),
+    exec_q3: bulletQ(text.exec_summary_q3),
+    exec_q4: bulletQ(text.exec_summary_q4),
+
+    ov_q1: bulletQ(text.ctrl_overview_q1),
+    ov_q2: bulletQ(text.ctrl_overview_q2),
+
+    dd_q1: bulletQ(text.ctrl_deepdive_q1),
+    dd_q2: bulletQ(text.ctrl_deepdive_q2),
+
+    th_q1: bulletQ(text.themes_q1),
+    th_q2: bulletQ(text.themes_q2),
+
+    col_q1: bulletQ(text.adapt_with_colleagues_q1),
+
+    // Note: your schema uses adapt_with_leaders_q2 for the single leader question
+    lead_q1: bulletQ(text.adapt_with_leaders_q2),
+
     workWith: {
       concealed: adaptC,
       triggered: adaptL,
@@ -516,9 +581,9 @@ function normaliseInput(d = {}) {
       lead: ""
     },
 
-    Act1: a1,
-    Act2: a2,
-    Act3: a3,
+    Act1: act1,
+    Act2: act2,
+    Act3: act3,
 
     chartUrl,
   };
@@ -546,6 +611,20 @@ function buildProbe(P, domSecond, tpl, ov) {
       act1: S(P.Act1).length,
       act2: S(P.Act2).length,
       act3: S(P.Act3).length,
+
+      // NEW: question lens
+      exec_q1: S(P.exec_q1).length,
+      exec_q2: S(P.exec_q2).length,
+      exec_q3: S(P.exec_q3).length,
+      exec_q4: S(P.exec_q4).length,
+      ov_q1: S(P.ov_q1).length,
+      ov_q2: S(P.ov_q2).length,
+      dd_q1: S(P.dd_q1).length,
+      dd_q2: S(P.dd_q2).length,
+      th_q1: S(P.th_q1).length,
+      th_q2: S(P.th_q2).length,
+      col_q1: S(P.col_q1).length,
+      lead_q1: S(P.lead_q1).length,
     },
     layoutOverrides: {
       appliedCount: ov?.applied?.length || 0,
@@ -565,16 +644,16 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
+    // FIX: secondKey fallback should not reuse dominantKey
     const domSecond = computeDomAndSecondKeys({
       raw: payload,
       domKey: payload?.ctrl?.dominantKey || payload?.dominantKey,
-      secondKey: payload?.ctrl?.secondKey || payload?.dominantKey
+      secondKey: payload?.ctrl?.secondKey || payload?.secondKey
     });
 
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
     const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
 
-    // COACH V2: new template naming
     const tpl = {
       combo: domSecond.templateKey,
       safeCombo,
@@ -623,6 +702,12 @@ export default async function handler(req, res) {
     if (p3) {
       drawTextBox(p3, font, P.exec_summary_para1, L.p3Text.exec1);
       drawTextBox(p3, font, P.exec_summary_para2, L.p3Text.exec2);
+
+      // NEW: Exec questions
+      drawTextBox(p3, font, P.exec_q1, L.p3Q.exec_q1);
+      drawTextBox(p3, font, P.exec_q2, L.p3Q.exec_q2);
+      drawTextBox(p3, font, P.exec_q3, L.p3Q.exec_q3);
+      drawTextBox(p3, font, P.exec_q4, L.p3Q.exec_q4);
     }
 
     if (p4) {
@@ -633,6 +718,10 @@ export default async function handler(req, res) {
       } catch (e) {
         console.warn("[fill-template:COACH] Chart skipped:", e?.message || String(e));
       }
+
+      // NEW: Overview questions
+      drawTextBox(p4, font, P.ov_q1, L.p4Q.ov_q1);
+      drawTextBox(p4, font, P.ov_q2, L.p4Q.ov_q2);
     }
 
     if (p5) {
@@ -640,6 +729,12 @@ export default async function handler(req, res) {
       drawTextBox(p5, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
       drawTextBox(p5, font, P.themes_para1, L.p5Text.th1);
       drawTextBox(p5, font, P.themes_para2, L.p5Text.th2);
+
+      // NEW: Deep dive + Themes questions
+      drawTextBox(p5, font, P.dd_q1, L.p5Q.dd_q1);
+      drawTextBox(p5, font, P.dd_q2, L.p5Q.dd_q2);
+      drawTextBox(p5, font, P.th_q1, L.p5Q.th_q1);
+      drawTextBox(p5, font, P.th_q2, L.p5Q.th_q2);
     }
 
     // Page 6
@@ -648,6 +743,10 @@ export default async function handler(req, res) {
       drawTextBox(p6, font, P.workWith?.triggered, L.p6WorkWith.collabT);
       drawTextBox(p6, font, P.workWith?.regulated, L.p6WorkWith.collabR);
       drawTextBox(p6, font, P.workWith?.lead,      L.p6WorkWith.collabL);
+
+      // NEW: Adapt questions
+      drawTextBox(p6, font, P.col_q1,  L.p6Q.col_q1);
+      drawTextBox(p6, font, P.lead_q1, L.p6Q.lead_q1);
     }
 
     // Page 7
