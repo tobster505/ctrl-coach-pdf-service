@@ -1,154 +1,202 @@
 /**
- * CTRL Coach Export Service · fill-template (Coach flow)
- * Path: /pages/api/fill-template.js  (ctrl-coach-pdf-service)
+ * CTRL Coach Export Service · fill-template (COACH V1 · 12 templates + chart + 3 act boxes)
  *
- * Layout:
- *   p1: name/date (cover)
- *   p2: name header only
- *   p3: snapshot_overview        (from snapshot_summary)
- *   p4: summary                  (from overview)
- *   p5: frequency + spiderdesc   (plus chart)
- *   p6: sequence
- *   p7: themepair
- *   p8: adapt_colleagues
- *   p9: adapt_leaders
- *   p10: tips
- *   p11: actions / acts
+ * Based on: fill-template V12.3
+ * Changes:
+ * - Reads coach payload keys:
+ *   exec_summary, ctrl_overview, ctrl_deepdive, themes,
+ *   adapt_with_colleagues, adapt_with_leaders, actions
+ * - Page 6/7 text blocks now use adapt_* content
+ * - Act1–Act3 derived by splitting actions into 3 chunks (for the 3 action boxes)
  *
- * Header: full name appears on pages 2–11.
+ * Domain:
+ * - ctrl-coach-pdf-service.vercel.app
  */
+
 export const config = { runtime: "nodejs" };
 
-/* ───────────── imports ───────────── */
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-/* ───────────── tiny utils ───────────── */
+/* ───────────── small utils ───────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
-const N = (v, fb = 0)   => (Number.isFinite(+v) ? +v : fb);
+const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
+const norm = (s) => S(s).replace(/\s+/g, " ").trim();
+const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
+const okArr = (a) => Array.isArray(a);
 
-const norm = (v, fb = "") =>
-  String(v ?? fb)
-    .normalize("NFKC")
-    .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2010-\u2014]/g, "-")
-    .replace(/\u2026/g, "...")
-    .replace(/\u00A0/g, " ")
-    .replace(/[•·]/g, "-")
-    // arrows → WinAnsi-safe
-    .replace(/\u2194/g, "<->").replace(/\u2192/g, "->").replace(/\u2190/g, "<-")
-    .replace(/\u2191/g, "^").replace(/\u2193/g, "v").replace(/[\u2196-\u2199]/g, "->")
-    .replace(/\u21A9/g, "<-").replace(/\u21AA/g, "->")
-    .replace(/\u00D7/g, "x")
-    // zero-width, emoji/PUA
-    .replace(/[\u200B-\u200D\u2060]/g, "")
-    .replace(/[\uD800-\uDFFF]/g, "")
-    .replace(/[\uE000-\uF8FF]/g, "")
-    // tidy
-    .replace(/\t/g, " ").replace(/\r\n?/g, "\n")
-    .replace(/[ \f\v]+/g, " ").replace(/[ \t]+\n/g, "\n").trim();
-
-function parseDataParam(b64ish) {
-  if (!b64ish) return {};
-  let s = String(b64ish);
-  try { s = decodeURIComponent(s); } catch {}
-  s = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (s.length % 4) s += "=";
-  try { return JSON.parse(Buffer.from(s, "base64").toString("utf8")); }
-  catch { return {}; }
+function safeJson(obj) {
+  try { return JSON.parse(JSON.stringify(obj)); }
+  catch { return { _error: "Could not serialise debug object" }; }
 }
 
-/* GET/POST payload reader (supports ?data= and JSON body) */
-async function readPayload(req) {
-  const q = req.method === "POST" ? (req.body || {}) : (req.query || {});
-  if (q.data) return parseDataParam(q.data);
-  if (req.method === "POST" && !q.data) {
-    try {
-      return typeof req.json === "function" ? await req.json() : (req.body || {});
-    } catch { /* fallthrough */ }
+/* ───────── filename helpers ───────── */
+function clampStrForFilename(s) {
+  return S(s)
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Za-z0-9_\-]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+function parseDateLabelToYYYYMMDD(dateLbl) {
+  const s = S(dateLbl).trim();
+  const m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+  if (m) {
+    const dd = String(m[1]).padStart(2, "0");
+    const monRaw = m[2].toLowerCase();
+    const yyyy = m[3];
+    const map = {
+      jan: "01", january: "01",
+      feb: "02", february: "02",
+      mar: "03", march: "03",
+      apr: "04", april: "04",
+      may: "05",
+      jun: "06", june: "06",
+      jul: "07", july: "07",
+      aug: "08", august: "08",
+      sep: "09", sept: "09", september: "09",
+      oct: "10", october: "10",
+      nov: "11", november: "11",
+      dec: "12", december: "12",
+    };
+    const mm = map[monRaw] || map[monRaw.slice(0, 3)];
+    if (mm) return `${yyyy}-${mm}-${dd}`;
   }
-  return {};
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  return clampStrForFilename(s || "date");
+}
+function makeOutputFilename(fullName, dateLbl) {
+  const parts = S(fullName).trim().split(/\s+/).filter(Boolean);
+  const first = parts[0] || "First";
+  const last = parts.length > 1 ? parts[parts.length - 1] : "Surname";
+  const datePart = parseDateLabelToYYYYMMDD(dateLbl);
+  const fn = clampStrForFilename(first);
+  const ln = clampStrForFilename(last);
+  return `Coach_Profile_${fn}_${ln}_${datePart}.pdf`;
 }
 
-/* TL → simple textbox (does internal TL->BL conversion) */
-function drawTextBox(page, font, text, spec = {}, opts = {}) {
-  if (!page) return;
-  const {
-    x = 40,
-    y = 40,
-    w = 540,
-    size = 12,
-    lineGap = 3,
-    color = rgb(0, 0, 0),
-    align = "left",
-    h,               // optional height for auto maxLines
-  } = spec;
-
-  const lineHeight = Math.max(1, size) + lineGap;
-  const maxLines =
-    opts.maxLines ??
-    spec.maxLines ??
-    (h ? Math.max(1, Math.floor(h / lineHeight)) : 6);
-
-  const hard = norm(text || "");
-  if (!hard) return;
-
-  const lines = hard.split(/\n/).map((s) => s.trim());
-  const wrapped = [];
-  const widthOf = (s) => font.widthOfTextAtSize(s, Math.max(1, size));
-
-  const wrapLine = (ln) => {
-    const words = ln.split(/\s+/);
-    let cur = "";
-    for (let i = 0; i < words.length; i++) {
-      const nxt = cur ? `${cur} ${words[i]}` : words[i];
-      if (widthOf(nxt) <= w || !cur) cur = nxt;
-      else {
-        wrapped.push(cur);
-        cur = words[i];
-      }
+/* ───────── text wrapping + drawing ───────── */
+function wrapText(font, text, size, w) {
+  const raw = S(text);
+  const paragraphs = raw.split("\n");
+  const lines = [];
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/).filter(Boolean);
+    let line = "";
+    if (!words.length) { lines.push(""); continue; }
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      const width = font.widthOfTextAtSize(test, size);
+      if (width <= w) line = test;
+      else { if (line) lines.push(line); line = word; }
     }
-    wrapped.push(cur);
-  };
-  for (const ln of lines) wrapLine(ln);
+    if (line) lines.push(line);
+  }
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
 
-  const out = wrapped.slice(0, maxLines);
+function drawTextBox(page, font, text, box, opts = {}) {
+  if (!page || !font || !box) return;
+  const t0 = S(text);
+  if (!t0.trim()) return;
+
   const pageH = page.getHeight();
-  const baselineY = pageH - y;
 
-  let yCursor = baselineY;
-  for (const ln of out) {
-    let xDraw = x;
-    const wLn = widthOf(ln);
-    if (align === "center") xDraw = x + (w - wLn) / 2;
-    else if (align === "right") xDraw = x + (w - wLn);
-    page.drawText(ln, {
-      x: xDraw,
-      y: yCursor - size,
-      size: Math.max(1, size),
-      font,
-      color,
-    });
-    yCursor -= lineHeight;
+  const size = N(opts.size ?? box.size ?? 12);
+  const lineGap = N(opts.lineGap ?? box.lineGap ?? 2);
+  const maxLines = N(opts.maxLines ?? box.maxLines ?? 999);
+  const alignRaw = String(opts.align ?? box.align ?? "left").toLowerCase();
+  const align = (alignRaw === "centre") ? "center" : alignRaw;
+  const pad = N(opts.pad ?? box.pad ?? 0);
+
+  let x = N(box.x);
+  let w = Math.max(0, N(box.w));
+  let h = Math.max(0, N(box.h));
+
+  // Auto-expand height so maxLines can actually render.
+  const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
+  if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
+    const lineHeight = size + lineGap;
+    const hNeeded = (pad * 2) + size + (Math.max(0, maxLines - 1) * lineHeight);
+    h = Math.max(h, hNeeded);
+  }
+
+  const y = pageH - N(box.y) - h;
+
+  const innerW = Math.max(0, w - pad * 2);
+  const lines = wrapText(font, t0.replace(/\r/g, ""), size, innerW).slice(0, maxLines);
+
+  const lineHeight = size + lineGap;
+  let cursorY = y + h - pad - size;
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    let dx = x + pad;
+    if (align !== "left") {
+      const lw = font.widthOfTextAtSize(ln, size);
+      if (align === "center") dx = x + (w - lw) / 2;
+      if (align === "right") dx = x + w - pad - lw;
+    }
+    page.drawText(ln, { x: dx, y: cursorY, size, font, color: rgb(0, 0, 0) });
+    cursorY -= lineHeight;
   }
 }
 
-/* robust /public template loader */
-async function loadTemplateBytesLocal(filename) {
-  const fname = String(filename || "").trim();
+/* ───────── paragraph splitting ───────── */
+function splitToTwoParas(s) {
+  const raw = S(s).replace(/\r/g, "").trim();
+  if (!raw) return ["", ""];
+  const parts = raw.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 2) return [parts[0], parts.slice(1).join("\n\n")];
+  const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length >= 2) {
+    const mid = Math.ceil(sentences.length / 2);
+    return [sentences.slice(0, mid).join(" ").trim(), sentences.slice(mid).join(" ").trim()];
+  }
+  return [raw, ""];
+}
+
+// Split long block into 3 roughly-even chunks (for Act1–Act3 boxes)
+function splitToThreeChunks(s) {
+  const raw = S(s).replace(/\r/g, "").trim();
+  if (!raw) return ["", "", ""];
+
+  // Prefer blank-line paragraphs
+  const paras = raw.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (paras.length >= 3) return [paras[0], paras[1], paras.slice(2).join("\n\n")];
+  if (paras.length === 2) return [paras[0], paras[1], ""];
+
+  // Else split sentences
+  const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length >= 3) {
+    const n = sentences.length;
+    const a = Math.ceil(n / 3);
+    const b = Math.ceil((n - a) / 2);
+    const s1 = sentences.slice(0, a).join(" ").trim();
+    const s2 = sentences.slice(a, a + b).join(" ").trim();
+    const s3 = sentences.slice(a + b).join(" ").trim();
+    return [s1, s2, s3];
+  }
+
+  return [raw, "", ""];
+}
+
+/* ───────── template loader ───────── */
+async function loadTemplateBytesLocal(fname) {
   if (!fname.endsWith(".pdf")) throw new Error(`Invalid template filename: ${fname}`);
 
   const __file = fileURLToPath(import.meta.url);
-  const __dir  = path.dirname(__file);
+  const __dir = path.dirname(__file);
 
   const candidates = [
-    path.join(__dir, "..", "..", "public", fname),
+    path.join(process.cwd(), "public", fname),
     path.join(__dir, "..", "public", fname),
     path.join(__dir, "public", fname),
-    path.join(process.cwd(), "public", fname),
     path.join(__dir, fname),
   ];
 
@@ -157,363 +205,439 @@ async function loadTemplateBytesLocal(filename) {
     try { return await fs.readFile(pth); }
     catch (err) { lastErr = err; }
   }
-  throw new Error(`Template not found for /public: ${fname} (${lastErr?.message||"no detail"})`);
+
+  throw new Error(
+    `Template not found: ${fname}. Tried: ${candidates.join(" | ")}. Last: ${lastErr?.message || "no detail"}`
+  );
 }
 
-/* helpers for QuickChart spider (optional) */
-function parseCountsFromFreq(freqStr = "", fb = {C:0,T:0,R:0,L:0}) {
-  const out = { C:0, T:0, R:0, L:0 };
-  const s = String(freqStr || "");
-  const re = /([CTRL]):\s*([0-9]+)/gi;
-  let m;
-  while ((m = re.exec(s))) { out[m[1].toUpperCase()] = Number(m[2]) || 0; }
-  for (const k of ["C","T","R","L"]) if (!out[k] && Number(fb[k])) out[k] = Number(fb[k]);
-  return out;
-}
-function buildSpiderQuickChartUrlFromCounts(counts) {
-  const theme = {
-    stroke:"#4B2E83",
-    fill:"rgba(75,46,131,0.22)",
-    point:"#4B2E83",
-    grid:"rgba(0,0,0,0.14)",
-    labels:"#555"
-  };
-  const data = [N(counts.C,0), N(counts.T,0), N(counts.R,0), N(counts.L,0)];
-  const cfg = {
-    type:"radar",
-    data:{
-      labels:["Concealed","Triggered","Regulated","Lead"],
-      datasets:[{
-        label:"CTRL",
-        data,
-        fill:true,
-        borderColor:theme.stroke,
-        backgroundColor:theme.fill,
-        pointBackgroundColor:theme.point,
-        pointBorderColor:"#fff",
-        borderWidth:4,
-        pointRadius:4,
-        pointBorderWidth:2
-      }]
-    },
-    options:{
-      plugins:{legend:{display:false}},
-      scales:{
-        r:{
-          min:0,
-          max:5,
-          ticks:{ stepSize:1, color:theme.labels, font:{size:12}},
-          grid:{color:theme.grid, circular:true},
-          pointLabels:{ font:{ size:18, weight:"700"}, color:theme.labels }
-        }
-      }
-    }
-  };
-  const u = new URL("https://quickchart.io/chart");
-  u.searchParams.set("c", JSON.stringify(cfg));
-  u.searchParams.set("backgroundColor","transparent");
-  u.searchParams.set("width","700");
-  u.searchParams.set("height","700");
-  u.searchParams.set("v", Date.now().toString(36));
-  return u.toString();
-}
-async function embedRemoteImage(pdfDoc, url) {
+/* ───────── payload parsing ───────── */
+async function readPayload(req) {
+  if (req.method === "POST") {
+    const chunks = [];
+    for await (const ch of req) chunks.push(ch);
+    const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+
+  const url = new URL(req.url, "http://localhost");
+  const dataB64 = url.searchParams.get("data") || "";
+  if (!dataB64) return {};
+
   try {
-    if (!url || !/^https?:/i.test(url)) return null;
-    if (typeof fetch === "undefined") return null;
-    const res = await fetch(url); if (!res.ok) return null;
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes[0] === 0x89 && bytes[1] === 0x50) return await pdfDoc.embedPng(bytes);
-    if (bytes[0] === 0xff && bytes[1] === 0xd8) return await pdfDoc.embedJpg(bytes);
-    try { return await pdfDoc.embedPng(bytes); } catch { return await pdfDoc.embedJpg(bytes); }
-  } catch { return null; }
+    const raw = Buffer.from(dataB64, "base64").toString("utf8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
 }
 
-/* safe page getter */
-const pageOrNull = (pages, idx0) => (pages[idx0] ?? null);
+/* ───────── dom/second detection ───────── */
+function resolveStateKey(any) {
+  const s = S(any).trim().toUpperCase();
+  const c = s.charAt(0);
+  if (["C", "T", "R", "L"].includes(c)) return c;
 
-/* ───────────── handler ───────────── */
+  const low = S(any).toLowerCase();
+  if (low.includes("concealed")) return "C";
+  if (low.includes("triggered")) return "T";
+  if (low.includes("regulated")) return "R";
+  if (low.includes("lead")) return "L";
+  return null;
+}
+
+function computeDomAndSecondKeys(P) {
+  const raw = P.raw || {};
+  const ctrl = raw.ctrl || {};
+  const summary = (ctrl.summary || raw.ctrl?.summary || {}) || {};
+
+  const domKey =
+    resolveStateKey(P.domKey) ||
+    resolveStateKey(raw.dominantKey) ||
+    resolveStateKey(summary.dominant) ||
+    resolveStateKey(summary.domState) ||
+    resolveStateKey(raw.ctrl?.dominant) ||
+    resolveStateKey(raw.domState) ||
+    "R";
+
+  const secondKey =
+    resolveStateKey(P.secondKey) ||
+    resolveStateKey(raw.secondKey) ||
+    resolveStateKey(summary.secondState) ||
+    resolveStateKey(raw.secondState) ||
+    (domKey === "R" ? "T" : "R");
+
+  return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
+}
+
+/* ───────── chart embed (UNCHANGED) ───────── */
+function makeSpiderChartUrl12(bandsRaw) {
+  const keys = [
+    "C_low","C_mid","C_high",
+    "T_low","T_mid","T_high",
+    "R_low","R_mid","R_high",
+    "L_low","L_mid","L_high",
+  ];
+
+  const displayLabels = [
+    "", "Concealed", "",
+    "", "Triggered", "",
+    "", "Regulated", "",
+    "", "Lead", ""
+  ];
+
+  const vals = keys.map((k) => Number(bandsRaw?.[k] || 0));
+  const maxVal = Math.max(...vals, 1);
+  const data = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
+
+  const CTRL_COLOURS = {
+    C: { low: "rgba(230, 228, 225, 0.55)", mid: "rgba(184, 180, 174, 0.55)", high: "rgba(110, 106, 100, 0.55)" },
+    T: { low: "rgba(244, 225, 198, 0.55)", mid: "rgba(211, 155,  74, 0.55)", high: "rgba(154,  94,  26, 0.55)" },
+    R: { low: "rgba(226, 236, 230, 0.55)", mid: "rgba(143, 183, 161, 0.55)", high: "rgba( 79, 127, 105, 0.55)" },
+    L: { low: "rgba(230, 220, 227, 0.55)", mid: "rgba(164, 135, 159, 0.55)", high: "rgba( 94,  63,  90, 0.55)" },
+  };
+
+  const colours = keys.map((k) => {
+    const state = k[0];
+    const tier = k.split("_")[1];
+    return CTRL_COLOURS[state]?.[tier] || "rgba(0,0,0,0.10)";
+  });
+
+  const startAngle = -Math.PI / 4;
+
+  const cfg = {
+    type: "polarArea",
+    data: {
+      labels: displayLabels,
+      datasets: [{
+        data,
+        backgroundColor: colours,
+        borderWidth: 3,
+        borderColor: "rgba(0, 0, 0, 0.20)",
+      }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      startAngle,
+      scales: {
+        r: {
+          startAngle,
+          min: 0,
+          max: 1,
+          ticks: { display: false },
+          grid: { display: true },
+          angleLines: { display: false },
+          pointLabels: {
+            display: true,
+            padding: 14,
+            font: { size: 26, weight: "bold" },
+            centerPointLabels: true,
+          },
+        },
+      },
+    },
+  };
+
+  const enc = encodeURIComponent(JSON.stringify(cfg));
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=900&height=900&backgroundColor=transparent&version=4`;
+}
+
+async function embedRemoteImage(pdfDoc, url) {
+  if (!url) return null;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch chart: ${res.status} ${res.statusText}`);
+
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const sig = String.fromCharCode(buf[0], buf[1], buf[2], buf[3] || 0);
+
+  if (sig.startsWith("\x89PNG")) return await pdfDoc.embedPng(buf);
+  if (sig.startsWith("\xff\xd8")) return await pdfDoc.embedJpg(buf);
+
+  try { return await pdfDoc.embedPng(buf); }
+  catch { return await pdfDoc.embedJpg(buf); }
+}
+
+async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
+  if (!pdfDoc || !page || !box) return;
+
+  let url = S(chartUrl).trim();
+  if (!url) {
+    const hasAny = bandsRaw && typeof bandsRaw === "object" &&
+      Object.values(bandsRaw).some((v) => Number(v) > 0);
+    if (!hasAny) return;
+    url = makeSpiderChartUrl12(bandsRaw);
+  }
+
+  const img = await embedRemoteImage(pdfDoc, url);
+  if (!img) return;
+
+  const H = page.getHeight();
+  page.drawImage(img, {
+    x: box.x,
+    y: H - box.y - box.h,
+    width: box.w,
+    height: box.h
+  });
+}
+
+/* ───────── DEFAULT LAYOUT (UNCHANGED from V12.3) ───────── */
+const DEFAULT_LAYOUT = /* 그대로 유지: V12.3 DEFAULT_LAYOUT 객체를 그대로 붙여넣으세요 */ null;
+
+/* ───────── URL layout overrides ───────── */
+function applyLayoutOverridesFromUrl(layoutPages, url) {
+  const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
+  const applied = [];
+  const ignored = [];
+
+  for (const [k, v] of url.searchParams.entries()) {
+    if (!k.startsWith("L_")) continue;
+
+    const bits = k.split("_");
+    if (bits.length < 4) { ignored.push({ k, v, why: "bad_key_shape" }); continue; }
+
+    const pageKey = bits[1];
+    const boxKey = bits[2];
+    const prop = bits.slice(3).join("_");
+
+    if (!layoutPages?.[pageKey]) { ignored.push({ k, v, why: "unknown_page", pageKey }); continue; }
+    if (!layoutPages?.[pageKey]?.[boxKey]) { ignored.push({ k, v, why: "unknown_box", pageKey, boxKey }); continue; }
+    if (!allowed.has(prop)) { ignored.push({ k, v, why: "unsupported_prop", prop }); continue; }
+
+    if (prop === "align") {
+      const a0 = String(v || "").toLowerCase();
+      const a = (a0 === "centre") ? "center" : a0;
+      if (!["left", "center", "right"].includes(a)) { ignored.push({ k, v, why: "bad_align", got: a0 }); continue; }
+      layoutPages[pageKey][boxKey][prop] = a;
+      applied.push({ k, v, pageKey, boxKey, prop });
+      continue;
+    }
+
+    const num = Number(v);
+    if (!Number.isFinite(num)) { ignored.push({ k, v, why: "not_a_number" }); continue; }
+
+    layoutPages[pageKey][boxKey][prop] = (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
+    applied.push({ k, v, pageKey, boxKey, prop });
+  }
+
+  return { applied, ignored, layoutPages };
+}
+
+/* ───────── input normaliser (COACH) ───────── */
+function normaliseInput(d = {}) {
+  const identity = okObj(d.identity) ? d.identity : {};
+  const text = okObj(d.text) ? d.text : {};
+  const ctrl = okObj(d.ctrl) ? d.ctrl : {};
+  const summary = okObj(ctrl.summary) ? ctrl.summary : {};
+
+  const fullName = S(identity.fullName || d.fullName || d.FullName || summary?.identity?.fullName || "").trim();
+  const dateLabel = S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
+
+  const bandsRaw =
+    (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
+    (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
+    (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
+    {};
+
+  // Coach: split these blocks into 2 paragraphs each (like User)
+  const execBlock = S(text.exec_summary || "");
+  const [execA, execB] = splitToTwoParas(execBlock);
+
+  const ovBlock = S(text.ctrl_overview || "");
+  const [ovA, ovB] = splitToTwoParas(ovBlock);
+
+  const ddBlock = S(text.ctrl_deepdive || "");
+  const [ddA, ddB] = splitToTwoParas(ddBlock);
+
+  const thBlock = S(text.themes || "");
+  const [thA, thB] = splitToTwoParas(thBlock);
+
+  // Coach adapt blocks (single blocks; we will draw into p6 grid slots)
+  const adaptC = S(text.adapt_with_colleagues || "");
+  const adaptL = S(text.adapt_with_leaders || "");
+
+  // Coach actions (single block) -> derive 3 chunks for the 3 act boxes
+  const actsBlock = S(text.actions || "");
+  const [a1, a2, a3] = splitToThreeChunks(actsBlock);
+
+  const chartUrl =
+    S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
+    S(d.chart?.spiderUrl || d.chart?.url || "").trim() ||
+    S(summary?.chart?.spiderUrl || "").trim();
+
+  return {
+    raw: d,
+    identity: { fullName, dateLabel },
+    bands: bandsRaw,
+
+    exec_summary_para1: execA,
+    exec_summary_para2: execB,
+
+    ctrl_overview_para1: ovA,
+    ctrl_overview_para2: ovB,
+
+    ctrl_deepdive_para1: ddA,
+    ctrl_deepdive_para2: ddB,
+
+    themes_para1: thA,
+    themes_para2: thB,
+
+    // Map adapt blocks into the 4 workWith boxes (best-fit)
+    // We keep the same template layout; this is just content mapping.
+    workWith: {
+      concealed: adaptC, // top-left
+      triggered: adaptL, // top-right
+      regulated: "",     // bottom-left unused
+      lead: ""           // bottom-right unused
+    },
+
+    Act1: a1,
+    Act2: a2,
+    Act3: a3,
+
+    chartUrl,
+  };
+}
+
+/* ───────── debug probe ───────── */
+function buildProbe(P, domSecond, tpl, ov, L) {
+  return {
+    ok: true,
+    where: "fill-template:COACH:debug",
+    template: tpl,
+    domSecond: safeJson(domSecond),
+    identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
+    textLengths: {
+      exec1: S(P.exec_summary_para1).length,
+      exec2: S(P.exec_summary_para2).length,
+      ov1: S(P.ctrl_overview_para1).length,
+      ov2: S(P.ctrl_overview_para2).length,
+      dd1: S(P.ctrl_deepdive_para1).length,
+      dd2: S(P.ctrl_deepdive_para2).length,
+      th1: S(P.themes_para1).length,
+      th2: S(P.themes_para2).length,
+      adapt_colleagues: S(P.workWith?.concealed).length,
+      adapt_leaders: S(P.workWith?.triggered).length,
+      act1: S(P.Act1).length,
+      act2: S(P.Act2).length,
+      act3: S(P.Act3).length,
+    },
+    layoutOverrides: {
+      appliedCount: ov?.applied?.length || 0,
+      ignoredCount: ov?.ignored?.length || 0,
+      applied: ov?.applied || [],
+      ignored: ov?.ignored || [],
+    },
+  };
+}
+
+/* ───────── main handler ───────── */
 export default async function handler(req, res) {
   try {
-    const q   = req.method === "POST" ? (req.body || {}) : (req.query || {});
-    // default to coach template; allow ?tpl= override
-    const defaultTpl = "CTRL_Perspective_Assessment_Profile_template_slim_coach.pdf";
-    const tpl   = S(q.tpl || defaultTpl).replace(/[^A-Za-z0-9._-]/g, "");
-    const src   = await readPayload(req);
+    const url = new URL(req.url, "http://localhost");
+    const debug = url.searchParams.get("debug") === "1";
 
-    // expected payload (from Build_CoachPDF_Link):
-    const P = {
-      name:             norm(src?.person?.fullName || src?.fullName || "Perspective"),
-      dateLbl:          norm(src?.dateLbl || ""),
+    const payload = await readPayload(req);
+    const P = normaliseInput(payload);
 
-      // snapshot summary vs overview
-      snapshot_overview: norm(src?.snapshot_summary || src?.snapshot_overview || ""),
-      summary:           norm(src?.overview || src?.coach_summary || ""),
+    const domSecond = computeDomAndSecondKeys({
+      raw: payload,
+      domKey: payload?.ctrl?.dominantKey || payload?.dominantKey,
+      secondKey: payload?.ctrl?.secondKey || payload?.secondKey
+    });
 
-      // frequency & spider
-      freqText:         norm(src?.frequency || src?.freq || src?.spiderfreq || ""),
-      spiderdesc:       norm(src?.spiderdesc || ""),
+    const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
+    const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
+    const tpl = { combo: domSecond.templateKey, safeCombo, tpl: `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf` };
 
-      sequence:         norm(src?.sequence || src?.seqpat || ""),
-      themepair:        norm(src?.themepair),
-      adapt_colleagues: norm(src?.adapt_colleagues),
-      adapt_leaders:    norm(src?.adapt_leaders),
-      tips:             norm(src?.tips),
-      actions:          norm(src?.actions),
+    // IMPORTANT: replace DEFAULT_LAYOUT null with the V12.3 object (unchanged)
+    if (!DEFAULT_LAYOUT || !DEFAULT_LAYOUT.pages) throw new Error("DEFAULT_LAYOUT missing. Paste V12.3 DEFAULT_LAYOUT here.");
 
-      counts:           (src?.counts && typeof src.counts === "object") ? src.counts : null,
-      spiderfreq:       norm(src?.spiderfreq || ""),
-      chartUrl:         S(src?.chartUrl || "")
-    };
+    const L = safeJson(DEFAULT_LAYOUT.pages);
+    const ov = applyLayoutOverridesFromUrl(L, url);
 
-    // load template
-    const pdfBytes = await loadTemplateBytesLocal(tpl);
-    const pdfDoc   = await PDFDocument.load(pdfBytes);
-    const font     = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
+
+    const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     const pages = pdfDoc.getPages();
-    const p1  = pageOrNull(pages, 0);
-    const p2  = pageOrNull(pages, 1);
-    const p3  = pageOrNull(pages, 2);
-    const p4  = pageOrNull(pages, 3);
-    const p5  = pageOrNull(pages, 4);
-    const p6  = pageOrNull(pages, 5);
-    const p7  = pageOrNull(pages, 6);
-    const p8  = pageOrNull(pages, 7);
-    const p9  = pageOrNull(pages, 8);
-    const p10 = pageOrNull(pages, 9);
-    const p11 = pageOrNull(pages, 10);  // actions page
-    const p12 = pageOrNull(pages, 11);  // final page (header only)
 
-    /* ───────────── layout anchors (defaults) ───────────── */
-    const L = {
-      header:  { x: 380, y: 51,  w: 400, size: 13, align: "left", maxLines: 1 },
-      p1:      {
-        name: { x: 7,   y: 473, w: 500, size: 30, align: "center" },
-        date: { x: 210, y: 600, w: 500, size: 25, align: "left" }
-      },
-      // p3: snapshot_overview
-      p3: {
-        snapshot: { x: 25, y: 150, w: 550, size: 14, align: "left", maxLines: 100 }
-      },
-      // p4: summary (overview)
-      p4: {
-        summary: { x: 25, y: 150, w: 530, size: 13, align: "left", maxLines: 100 }
-      },
-      // p5: frequency + spiderdesc split + chart
-      p5: {
-        top:    { x: 25, y: 150, w: 160, size: 12, align: "left", maxLines: 100 }, // sd*
-        bottom: { x: 25, y: 480, w: 550, size: 12, align: "left", maxLines: 50  }, // sdb* (y updated)
-        chart:  { x: 255, y: 160, w: 340, h: 180 }
-      },
-      // p6: sequence
-      p6: {
-        sequence: { x: 25, y: 160, w: 550, size: 13, align: "left", maxLines: 500 }
-      },
-      // p7: themepair
-      p7: {
-        themepair: { x: 25, y: 270, w: 550, size: 13, align: "left", maxLines: 50 }
-      },
-      // p8: adapt_colleagues
-      p8: {
-        adapt_colleagues: { x: 25, y: 180, w: 550, size: 14, align: "left", maxLines: 50 }
-      },
-      // p9: adapt_leaders
-      p9: {
-        adapt_leaders: { x: 25, y: 180, w: 550, size: 14, align: "left", maxLines: 50 }
-      },
-      // p10: tips
-      p10: {
-        tips: { x: 25, y: 160, w: 550, size: 15, align: "left", maxLines: 50 }
-      },
-      // p11: actions
-      p11: {
-        acts: { x: 25, y: 160, w: 550, size: 15, align: "left", maxLines: 50 }
+    // Page 1
+    if (pages[0]) {
+      drawTextBox(pages[0], fontB, P.identity.fullName, L.p1.name, { maxLines: 1 });
+      drawTextBox(pages[0], font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
+    }
+
+    // Header name pages 2–8
+    const headerName = norm(P.identity.fullName);
+    if (headerName) {
+      for (let i = 1; i < Math.min(pages.length, 8); i++) {
+        const pk = `p${i + 1}`;
+        const box = L?.[pk]?.hdrName;
+        if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
       }
-    };
-
-    /* ───────────── dynamic overrides from URL ───────────── */
-    const overrideBox = (box, key) => {
-      if (!box) return;
-      if (q[`${key}x`]   != null) box.x        = N(q[`${key}x`],   box.x);
-      if (q[`${key}y`]   != null) box.y        = N(q[`${key}y`],   box.y);
-      if (q[`${key}w`]   != null) box.w        = N(q[`${key}w`],   box.w);
-      if (q[`${key}h`]   != null) box.h        = N(q[`${key}h`],   box.h || 0);
-      if (q[`${key}s`]   != null) box.size     = N(q[`${key}s`],   box.size);
-      if (q[`${key}max`] != null) box.maxLines = N(q[`${key}max`], box.maxLines);
-      if (q[`${key}align`])       box.align    = String(q[`${key}align`]);
-    };
-
-    // Snapshot overview (page 3) — `cs*`
-    overrideBox(L.p3.snapshot, "cs");
-    // Backwards-compat: also honour `ov*` for p3
-    overrideBox(L.p3.snapshot, "ov");
-
-    // Summary (page 4) — `ov*`
-    overrideBox(L.p4.summary, "ov");
-    // Backwards-compat: also accept `cs*`
-    overrideBox(L.p4.summary, "cs");
-
-    // p5 split: top block uses `sd*`, bottom block uses `sdb*`
-    overrideBox(L.p5.top,    "sd");   // sdx, sdy, sdw, sds, sdmax, sdalign
-    overrideBox(L.p5.bottom, "sdb");  // sdbx, sdby, sdbw, sdbs, sdbmax, sdbalign
-    // Backwards-compat: old `freq*` overrides top block
-    overrideBox(L.p5.top, "freq");
-    // Chart box
-    overrideBox(L.p5.chart, "chart");
-
-    // Sequence (page 6)
-    overrideBox(L.p6.sequence, "seq");
-
-    // Theme pair (page 7)
-    overrideBox(L.p7.themepair, "tp");
-
-    // Adapt colleagues (page 8)
-    overrideBox(L.p8.adapt_colleagues, "ac");
-
-    // Adapt leaders (page 9)
-    overrideBox(L.p9.adapt_leaders, "al");
-
-    // Tips (page 10)
-    overrideBox(L.p10.tips, "tips");
-
-    // Actions (page 11)
-    overrideBox(L.p11.acts, "acts");
-
-    /* ───────────── p1: full name & date ───────────── */
-    if (p1 && P.name)    drawTextBox(p1, font, P.name,    L.p1.name);
-    if (p1 && P.dateLbl) drawTextBox(p1, font, P.dateLbl, L.p1.date);
-
-    /* ───────────── page headers (p2..p11) ───────────── */
-    const putHeader = (page) => {
-      if (!page || !P.name) return;
-      drawTextBox(page, font, P.name, L.header, { maxLines: 1 });
-    };
-    [p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12].forEach(putHeader);
-
-    /* ───────────── p3: snapshot_overview ───────────── */
-    if (p3 && P.snapshot_overview) {
-      drawTextBox(p3, font, P.snapshot_overview, L.p3.snapshot);
     }
 
-    /* ───────────── p4: summary / overview ───────────── */
-    if (p4 && P.summary) {
-      drawTextBox(p4, font, P.summary, L.p4.summary);
+    const p3 = pages[2] || null;
+    const p4 = pages[3] || null;
+    const p5 = pages[4] || null;
+    const p6 = pages[5] || null;
+    const p7 = pages[6] || null;
+
+    if (p3) {
+      drawTextBox(p3, font, P.exec_summary_para1, L.p3Text.exec1);
+      drawTextBox(p3, font, P.exec_summary_para2, L.p3Text.exec2);
     }
 
-    /* ───────────── p5: frequency + spiderdesc + chart ───────────── */
+    if (p4) {
+      drawTextBox(p4, font, P.ctrl_overview_para1, L.p4Text.ov1);
+      drawTextBox(p4, font, P.ctrl_overview_para2, L.p4Text.ov2);
+      try {
+        await embedRadarFromBandsOrUrl(pdfDoc, p4, L.p4Text.chart, P.bands || {}, P.chartUrl);
+      } catch (e) {
+        console.warn("[fill-template:COACH] Chart skipped:", e?.message || String(e));
+      }
+    }
+
     if (p5) {
-      // Build the main frequency text
-      const freqParts = [];
-      if (P.freqText) {
-        freqParts.push(P.freqText);
-      } else if (P.spiderfreq) {
-        freqParts.push(P.spiderfreq);
-      } else if (P.counts) {
-        const c = {
-          C: N(P.counts.C, 0),
-          T: N(P.counts.T, 0),
-          R: N(P.counts.R, 0),
-          L: N(P.counts.L, 0)
-        };
-        freqParts.push(`Frequency · C: ${c.C} · T: ${c.T} · R: ${c.R} · L: ${c.L}`);
-      }
-      const freqText = freqParts.join(" ");
-
-      // Split spiderdesc into top + bottom by first blank line
-      let spiderTop = "";
-      let spiderBottom = "";
-      if (P.spiderdesc) {
-        const parts = P.spiderdesc.split(/\n\s*\n/);
-        if (parts.length === 1) {
-          spiderBottom = parts[0];
-        } else {
-          spiderTop = parts[0];
-          spiderBottom = parts.slice(1).join("\n\n");
-        }
-      }
-
-      const topCombined    = [freqText, spiderTop].filter(Boolean).join("\n\n");
-      const bottomCombined = spiderBottom;
-
-      if (topCombined) {
-        drawTextBox(p5, font, topCombined, L.p5.top);
-      }
-      if (bottomCombined) {
-        drawTextBox(p5, font, bottomCombined, L.p5.bottom);
-      }
-
-      // Chart
-      if (L.p5.chart) {
-        let chartUrl = String(P.chartUrl || "");
-        if (!chartUrl) {
-          const counts = P.counts ? {
-            C: N(P.counts.C, 0),
-            T: N(P.counts.T, 0),
-            R: N(P.counts.R, 0),
-            L: N(P.counts.L, 0)
-          } : parseCountsFromFreq(P.spiderfreq || "");
-          const sum = N(counts.C, 0) + N(counts.T, 0) + N(counts.R, 0) + N(counts.L, 0);
-          if (sum > 0) chartUrl = buildSpiderQuickChartUrlFromCounts(counts);
-        } else {
-          try {
-            const u = new URL(chartUrl);
-            u.searchParams.set("v", Date.now().toString(36));
-            chartUrl = u.toString();
-          } catch {}
-        }
-        if (chartUrl) {
-          const img = await embedRemoteImage(pdfDoc, chartUrl);
-          if (img) {
-            const H = p5.getHeight();
-            const { x, y, w, h } = L.p5.chart;
-            p5.drawImage(img, { x, y: H - y - h, width: w, height: h });
-          }
-        }
-      }
+      drawTextBox(p5, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
+      drawTextBox(p5, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
+      drawTextBox(p5, font, P.themes_para1, L.p5Text.th1);
+      drawTextBox(p5, font, P.themes_para2, L.p5Text.th2);
     }
 
-    /* ───────────── p6: sequence ───────────── */
-    if (p6 && P.sequence) {
-      drawTextBox(p6, font, P.sequence, L.p6.sequence);
+    // Page 6: reuse same 4-box grid, but we only populate top row (colleagues/leaders)
+    if (p6) {
+      drawTextBox(p6, font, P.workWith?.concealed, L.p6WorkWith.collabC);
+      drawTextBox(p6, font, P.workWith?.triggered, L.p6WorkWith.collabT);
+      drawTextBox(p6, font, P.workWith?.regulated, L.p6WorkWith.collabR);
+      drawTextBox(p6, font, P.workWith?.lead,      L.p6WorkWith.collabL);
     }
 
-    /* ───────────── p7: themepair ───────────── */
-    if (p7 && P.themepair) {
-      drawTextBox(p7, font, P.themepair, L.p7.themepair);
+    // Page 7: only 3 action boxes (derived from actions block)
+    if (p7) {
+      drawTextBox(p7, font, P.Act1, L.p7Actions.act1);
+      drawTextBox(p7, font, P.Act2, L.p7Actions.act2);
+      drawTextBox(p7, font, P.Act3, L.p7Actions.act3);
     }
 
-    /* ───────────── p8: adapt_colleagues ───────────── */
-    if (p8 && P.adapt_colleagues) {
-      drawTextBox(p8, font, P.adapt_colleagues, L.p8.adapt_colleagues);
-    }
+    const outBytes = await pdfDoc.save();
+    const outName = makeOutputFilename(P.identity.fullName, P.identity.dateLabel);
 
-    /* ───────────── p9: adapt_leaders ───────────── */
-    if (p9 && P.adapt_leaders) {
-      drawTextBox(p9, font, P.adapt_leaders, L.p9.adapt_leaders);
-    }
-
-    /* ───────────── p10: tips ───────────── */
-    if (p10 && P.tips) {
-      drawTextBox(p10, font, P.tips, L.p10.tips);
-    }
-
-    /* ───────────── p11: actions ───────────── */
-    if (p11 && P.actions) {
-      drawTextBox(p11, font, P.actions, L.p11.acts);
-    }
-
-    /* ───────── output ───────── */
-    const bytes = await pdfDoc.save();
-    const outName = S(
-      q.out || `CTRL_${P.name || "Coach"}_${P.dateLbl || ""}.pdf`
-    ).replace(/[^\w.-]+/g, "_");
     res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
-    res.end(Buffer.from(bytes));
+    res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    res
-      .status(400)
-      .json({ ok:false, error:`fill-template error: ${err?.message || String(err)}` });
+    console.error("[fill-template:COACH] CRASH", err);
+    res.status(500).json({
+      ok: false,
+      error: err?.message || String(err),
+      stack: err?.stack || null,
+    });
   }
 }
