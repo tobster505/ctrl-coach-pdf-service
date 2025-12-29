@@ -1,16 +1,10 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V1 · 12 templates + chart + 3 act boxes)
+ * CTRL Coach Export Service · fill-template (COACH V2 · 12 templates + chart + 3 act boxes)
  *
- * Based on: fill-template V12.3
- * Changes:
- * - Reads coach payload keys:
- *   exec_summary, ctrl_overview, ctrl_deepdive, themes,
- *   adapt_with_colleagues, adapt_with_leaders, actions
- * - Page 6/7 text blocks now use adapt_* content
- * - Act1–Act3 derived by splitting actions into 3 chunks (for the 3 action boxes)
- *
- * Domain:
- * - ctrl-coach-pdf-service.vercel.app
+ * Based on: COACH V1
+ * V2 change:
+ * - Template naming updated to:
+ *   public/CTRL_PoC_Coach_Assessment_Profile_template_XX.pdf
  */
 
 export const config = { runtime: "nodejs" };
@@ -20,12 +14,14 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
+/* ───────── template naming (COACH V2) ───────── */
+const TEMPLATE_PREFIX = "CTRL_PoC_Coach_Assessment_Profile_template_";
+
 /* ───────────── small utils ───────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
-const okArr = (a) => Array.isArray(a);
 
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
@@ -118,7 +114,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
-  // Auto-expand height so maxLines can actually render.
   const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
   if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
     const lineHeight = size + lineGap;
@@ -161,17 +156,14 @@ function splitToTwoParas(s) {
   return [raw, ""];
 }
 
-// Split long block into 3 roughly-even chunks (for Act1–Act3 boxes)
 function splitToThreeChunks(s) {
   const raw = S(s).replace(/\r/g, "").trim();
   if (!raw) return ["", "", ""];
 
-  // Prefer blank-line paragraphs
   const paras = raw.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (paras.length >= 3) return [paras[0], paras[1], paras.slice(2).join("\n\n")];
   if (paras.length === 2) return [paras[0], paras[1], ""];
 
-  // Else split sentences
   const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
   if (sentences.length >= 3) {
     const n = sentences.length;
@@ -422,7 +414,6 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
-    // UPDATED: only 3 actions + new coords
     p7Actions: {
       act1: { x: 50,  y: 380, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
       act2: { x: 100, y: 530, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
@@ -430,7 +421,6 @@ const DEFAULT_LAYOUT = {
     },
   },
 };
-
 
 /* ───────── URL layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
@@ -487,26 +477,15 @@ function normaliseInput(d = {}) {
     (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
     {};
 
-  // Coach: split these blocks into 2 paragraphs each (like User)
-  const execBlock = S(text.exec_summary || "");
-  const [execA, execB] = splitToTwoParas(execBlock);
+  const [execA, execB] = splitToTwoParas(S(text.exec_summary || ""));
+  const [ovA, ovB] = splitToTwoParas(S(text.ctrl_overview || ""));
+  const [ddA, ddB] = splitToTwoParas(S(text.ctrl_deepdive || ""));
+  const [thA, thB] = splitToTwoParas(S(text.themes || ""));
 
-  const ovBlock = S(text.ctrl_overview || "");
-  const [ovA, ovB] = splitToTwoParas(ovBlock);
-
-  const ddBlock = S(text.ctrl_deepdive || "");
-  const [ddA, ddB] = splitToTwoParas(ddBlock);
-
-  const thBlock = S(text.themes || "");
-  const [thA, thB] = splitToTwoParas(thBlock);
-
-  // Coach adapt blocks (single blocks; we will draw into p6 grid slots)
   const adaptC = S(text.adapt_with_colleagues || "");
   const adaptL = S(text.adapt_with_leaders || "");
 
-  // Coach actions (single block) -> derive 3 chunks for the 3 act boxes
-  const actsBlock = S(text.actions || "");
-  const [a1, a2, a3] = splitToThreeChunks(actsBlock);
+  const [a1, a2, a3] = splitToThreeChunks(S(text.actions || ""));
 
   const chartUrl =
     S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
@@ -530,13 +509,11 @@ function normaliseInput(d = {}) {
     themes_para1: thA,
     themes_para2: thB,
 
-    // Map adapt blocks into the 4 workWith boxes (best-fit)
-    // We keep the same template layout; this is just content mapping.
     workWith: {
-      concealed: adaptC, // top-left
-      triggered: adaptL, // top-right
-      regulated: "",     // bottom-left unused
-      lead: ""           // bottom-right unused
+      concealed: adaptC,
+      triggered: adaptL,
+      regulated: "",
+      lead: ""
     },
 
     Act1: a1,
@@ -548,7 +525,7 @@ function normaliseInput(d = {}) {
 }
 
 /* ───────── debug probe ───────── */
-function buildProbe(P, domSecond, tpl, ov, L) {
+function buildProbe(P, domSecond, tpl, ov) {
   return {
     ok: true,
     where: "fill-template:COACH:debug",
@@ -591,20 +568,27 @@ export default async function handler(req, res) {
     const domSecond = computeDomAndSecondKeys({
       raw: payload,
       domKey: payload?.ctrl?.dominantKey || payload?.dominantKey,
-      secondKey: payload?.ctrl?.secondKey || payload?.secondKey
+      secondKey: payload?.ctrl?.secondKey || payload?.dominantKey
     });
 
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
     const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
-    const tpl = { combo: domSecond.templateKey, safeCombo, tpl: `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf` };
 
-    // IMPORTANT: replace DEFAULT_LAYOUT null with the V12.3 object (unchanged)
-    if (!DEFAULT_LAYOUT || !DEFAULT_LAYOUT.pages) throw new Error("DEFAULT_LAYOUT missing. Paste V12.3 DEFAULT_LAYOUT here.");
+    // COACH V2: new template naming
+    const tpl = {
+      combo: domSecond.templateKey,
+      safeCombo,
+      tpl: `${TEMPLATE_PREFIX}${safeCombo}.pdf`
+    };
+
+    if (!DEFAULT_LAYOUT || !DEFAULT_LAYOUT.pages) {
+      throw new Error("DEFAULT_LAYOUT missing.");
+    }
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
     const ov = applyLayoutOverridesFromUrl(L, url);
 
-    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
+    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov));
 
     const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -658,7 +642,7 @@ export default async function handler(req, res) {
       drawTextBox(p5, font, P.themes_para2, L.p5Text.th2);
     }
 
-    // Page 6: reuse same 4-box grid, but we only populate top row (colleagues/leaders)
+    // Page 6
     if (p6) {
       drawTextBox(p6, font, P.workWith?.concealed, L.p6WorkWith.collabC);
       drawTextBox(p6, font, P.workWith?.triggered, L.p6WorkWith.collabT);
@@ -666,7 +650,7 @@ export default async function handler(req, res) {
       drawTextBox(p6, font, P.workWith?.lead,      L.p6WorkWith.collabL);
     }
 
-    // Page 7: only 3 action boxes (derived from actions block)
+    // Page 7
     if (p7) {
       drawTextBox(p7, font, P.Act1, L.p7Actions.act1);
       drawTextBox(p7, font, P.Act2, L.p7Actions.act2);
