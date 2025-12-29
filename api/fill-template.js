@@ -382,7 +382,55 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
 }
 
 /* ───────── DEFAULT LAYOUT (UNCHANGED from V12.3) ───────── */
-const DEFAULT_LAYOUT = /* 그대로 유지: V12.3 DEFAULT_LAYOUT 객체를 그대로 붙여넣으세요 */ null;
+const DEFAULT_LAYOUT = {
+  pages: {
+    p1: {
+      name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
+      date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
+    },
+
+    p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p5: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p6: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p7: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+
+    p3Text: {
+      exec1: { x: 25, y: 380, w: 550, h: 250, size: 17, align: "left", maxLines: 13 },
+      exec2: { x: 25, y: 590, w: 550, h: 420, size: 17, align: "left", maxLines: 22 },
+    },
+
+    p4Text: {
+      ov1: { x: 25, y: 160, w: 200, h: 240, size: 17, align: "left", maxLines: 20 },
+      ov2: { x: 25, y: 560, w: 550, h: 420, size: 17, align: "left", maxLines: 23 },
+      chart: { x: 250, y: 160, w: 320, h: 320 },
+    },
+
+    p5Text: {
+      dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
+      dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
+      th1: { x: 25, y: 540, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
+      th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
+    },
+
+    p6WorkWith: {
+      collabC: { x: 30, y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabR: { x: 30, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+    },
+
+    // UPDATED: only 3 actions + new coords
+    p7Actions: {
+      act1: { x: 50,  y: 380, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
+      act2: { x: 100, y: 530, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
+      act3: { x: 50,  y: 670, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
+    },
+  },
+};
+
 
 /* ───────── URL layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
