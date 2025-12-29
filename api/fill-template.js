@@ -483,7 +483,7 @@ const DEFAULT_LAYOUT = {
   },
 };
 
-/* ───────── URL layout overrides ───────── */
+/* ───────── URL layout overrides (FIX: support box keys with underscores) ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
   const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
   const applied = [];
@@ -496,31 +496,53 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     if (bits.length < 4) { ignored.push({ k, v, why: "bad_key_shape" }); continue; }
 
     const pageKey = bits[1];
-    const boxKey = bits[2];
-    const prop = bits.slice(3).join("_");
 
-    if (!layoutPages?.[pageKey]) { ignored.push({ k, v, why: "unknown_page", pageKey }); continue; }
-    if (!layoutPages?.[pageKey]?.[boxKey]) { ignored.push({ k, v, why: "unknown_box", pageKey, boxKey }); continue; }
-    if (!allowed.has(prop)) { ignored.push({ k, v, why: "unsupported_prop", prop }); continue; }
+    // ✅ prop is ALWAYS the last token (x/y/w/h/size/maxLines/align)
+    const prop = bits[bits.length - 1];
+
+    // ✅ boxKey is everything between pageKey and prop
+    const boxKey = bits.slice(2, bits.length - 1).join("_");
+
+    if (!layoutPages?.[pageKey]) {
+      ignored.push({ k, v, why: "unknown_page", pageKey });
+      continue;
+    }
+    if (!layoutPages?.[pageKey]?.[boxKey]) {
+      ignored.push({ k, v, why: "unknown_box", pageKey, boxKey });
+      continue;
+    }
+    if (!allowed.has(prop)) {
+      ignored.push({ k, v, why: "unsupported_prop", prop });
+      continue;
+    }
 
     if (prop === "align") {
       const a0 = String(v || "").toLowerCase();
       const a = (a0 === "centre") ? "center" : a0;
-      if (!["left", "center", "right"].includes(a)) { ignored.push({ k, v, why: "bad_align", got: a0 }); continue; }
+      if (!["left", "center", "right"].includes(a)) {
+        ignored.push({ k, v, why: "bad_align", got: a0 });
+        continue;
+      }
       layoutPages[pageKey][boxKey][prop] = a;
       applied.push({ k, v, pageKey, boxKey, prop });
       continue;
     }
 
     const num = Number(v);
-    if (!Number.isFinite(num)) { ignored.push({ k, v, why: "not_a_number" }); continue; }
+    if (!Number.isFinite(num)) {
+      ignored.push({ k, v, why: "not_a_number" });
+      continue;
+    }
 
-    layoutPages[pageKey][boxKey][prop] = (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
+    layoutPages[pageKey][boxKey][prop] =
+      (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
+
     applied.push({ k, v, pageKey, boxKey, prop });
   }
 
   return { applied, ignored, layoutPages };
 }
+
 
 /* ───────── question formatter (BULLET POINTS) ───────── */
 function bulletQ(s) {
