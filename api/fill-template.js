@@ -1,12 +1,10 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V5 · 12 templates + chart + 3 act boxes + QUESTION BOXES)
+ * CTRL Coach Export Service · fill-template (COACH V4 · 12 templates + chart + 3 act boxes + QUESTION BOXES)
  *
- * Based on: COACH V4
- * V5 changes (ONLY):
- * - Page 6 now has ONLY 2 WorkWith boxes: collabC + collabT
- * - Page 6 questions are drawn in TWO dedicated bottom boxes (separate from WorkWith text)
- * - Removes any Page 6 draw calls for collabR/collabL
- * - Keeps question keys as p6Q.col_q1 + p6Q.lead_q1 (so Gen JSON mapping does not change)
+ * Based on: COACH V3
+ * V4 changes (ONLY):
+ * - Adds WinAnsi-safe normalisation to prevent "WinAnsi cannot encode" crashes (e.g., U+2010 hyphen)
+ * - Applies normalisation in wrapText, drawTextBox, and bulletQ
  */
 
 export const config = { runtime: "nodejs" };
@@ -93,7 +91,7 @@ function parseDateLabelToYYYYMMDD(dateLbl) {
     const mm = map[monRaw] || map[monRaw.slice(0, 3)];
     if (mm) return `${yyyy}-${mm}-${dd}`;
   }
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/ser);
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   return clampStrForFilename(s || "date");
 }
@@ -440,21 +438,12 @@ const DEFAULT_LAYOUT = {
       th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
     },
 
-    /* ───────── PAGE 6 (UPDATED in V5) ───────── */
-    // Only 2 WorkWith boxes now: colleagues + leaders
     p6WorkWith: {
-      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabC: { x: 30, y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
       collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabR: { x: 30, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
-
-    // Two bottom question boxes (separate from WorkWith paragraphs)
-    p6Q: {
-      // left-bottom question
-      col_q1:  { x: 40, y: 990,  w: 520, h: 40, size: 13, align: "left", maxLines: 2 },
-      // right-bottom question
-      lead_q1: { x: 40, y: 1040, w: 520, h: 40, size: 13, align: "left", maxLines: 2 },
-    },
-    /* ───────── END PAGE 6 (UPDATED) ───────── */
 
     p7Actions: {
       act1: { x: 50,  y: 380, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
@@ -485,10 +474,16 @@ const DEFAULT_LAYOUT = {
       th_q1: { x: 25, y: 910, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
       th_q2: { x: 25, y: 950, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
     },
+
+    // Page 6: Adapt questions (colleagues + leaders)
+    p6Q: {
+      col_q1:  { x: 30, y: 760, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+      lead_q1: { x: 30, y: 800, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+    },
   },
 };
 
-/* ───────── URL layout overrides (FIX: support box keys with underscores) ───────── */
+/* ───────── URL layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
   const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
   const applied = [];
@@ -501,43 +496,26 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     if (bits.length < 4) { ignored.push({ k, v, why: "bad_key_shape" }); continue; }
 
     const pageKey = bits[1];
-    const prop = bits[bits.length - 1];
-    const boxKey = bits.slice(2, bits.length - 1).join("_");
+    const boxKey = bits[2];
+    const prop = bits.slice(3).join("_");
 
-    if (!layoutPages?.[pageKey]) {
-      ignored.push({ k, v, why: "unknown_page", pageKey });
-      continue;
-    }
-    if (!layoutPages?.[pageKey]?.[boxKey]) {
-      ignored.push({ k, v, why: "unknown_box", pageKey, boxKey });
-      continue;
-    }
-    if (!allowed.has(prop)) {
-      ignored.push({ k, v, why: "unsupported_prop", prop });
-      continue;
-    }
+    if (!layoutPages?.[pageKey]) { ignored.push({ k, v, why: "unknown_page", pageKey }); continue; }
+    if (!layoutPages?.[pageKey]?.[boxKey]) { ignored.push({ k, v, why: "unknown_box", pageKey, boxKey }); continue; }
+    if (!allowed.has(prop)) { ignored.push({ k, v, why: "unsupported_prop", prop }); continue; }
 
     if (prop === "align") {
       const a0 = String(v || "").toLowerCase();
       const a = (a0 === "centre") ? "center" : a0;
-      if (!["left", "center", "right"].includes(a)) {
-        ignored.push({ k, v, why: "bad_align", got: a0 });
-        continue;
-      }
+      if (!["left", "center", "right"].includes(a)) { ignored.push({ k, v, why: "bad_align", got: a0 }); continue; }
       layoutPages[pageKey][boxKey][prop] = a;
       applied.push({ k, v, pageKey, boxKey, prop });
       continue;
     }
 
     const num = Number(v);
-    if (!Number.isFinite(num)) {
-      ignored.push({ k, v, why: "not_a_number" });
-      continue;
-    }
+    if (!Number.isFinite(num)) { ignored.push({ k, v, why: "not_a_number" }); continue; }
 
-    layoutPages[pageKey][boxKey][prop] =
-      (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
-
+    layoutPages[pageKey][boxKey][prop] = (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
     applied.push({ k, v, pageKey, boxKey, prop });
   }
 
@@ -576,7 +554,7 @@ function normaliseInput(d = {}) {
   const adaptC = S(text.adapt_with_colleagues || "");
   const adaptL = S(text.adapt_with_leaders || "");
 
-  // Actions
+  // Actions now come as Act1/2/3 in your payload too, but keep fallback
   const act1 = S(d.Act1 || text.actions1 || "");
   const act2 = S(d.Act2 || text.actions2 || "");
   const act3 = S(d.Act3 || text.actions3 || "");
@@ -603,7 +581,7 @@ function normaliseInput(d = {}) {
     themes_para1: thA,
     themes_para2: thB,
 
-    // questions
+    // NEW: questions, bullet formatted
     exec_q1: bulletQ(text.exec_summary_q1),
     exec_q2: bulletQ(text.exec_summary_q2),
     exec_q3: bulletQ(text.exec_summary_q3),
@@ -620,12 +598,14 @@ function normaliseInput(d = {}) {
 
     col_q1: bulletQ(text.adapt_with_colleagues_q1),
 
-    // schema uses adapt_with_leaders_q2 for the single leader question
+    // Note: your schema uses adapt_with_leaders_q2 for the single leader question
     lead_q1: bulletQ(text.adapt_with_leaders_q2),
 
     workWith: {
       concealed: adaptC,
       triggered: adaptL,
+      regulated: "",
+      lead: ""
     },
 
     Act1: act1,
@@ -659,6 +639,7 @@ function buildProbe(P, domSecond, tpl, ov) {
       act2: S(P.Act2).length,
       act3: S(P.Act3).length,
 
+      // NEW: question lens
       exec_q1: S(P.exec_q1).length,
       exec_q2: S(P.exec_q2).length,
       exec_q3: S(P.exec_q3).length,
@@ -690,6 +671,7 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
+    // FIX: secondKey fallback should not reuse dominantKey
     const domSecond = computeDomAndSecondKeys({
       raw: payload,
       domKey: payload?.ctrl?.dominantKey || payload?.dominantKey,
@@ -748,6 +730,7 @@ export default async function handler(req, res) {
       drawTextBox(p3, font, P.exec_summary_para1, L.p3Text.exec1);
       drawTextBox(p3, font, P.exec_summary_para2, L.p3Text.exec2);
 
+      // NEW: Exec questions
       drawTextBox(p3, font, P.exec_q1, L.p3Q.exec_q1);
       drawTextBox(p3, font, P.exec_q2, L.p3Q.exec_q2);
       drawTextBox(p3, font, P.exec_q3, L.p3Q.exec_q3);
@@ -763,6 +746,7 @@ export default async function handler(req, res) {
         console.warn("[fill-template:COACH] Chart skipped:", e?.message || String(e));
       }
 
+      // NEW: Overview questions
       drawTextBox(p4, font, P.ov_q1, L.p4Q.ov_q1);
       drawTextBox(p4, font, P.ov_q2, L.p4Q.ov_q2);
     }
@@ -773,24 +757,26 @@ export default async function handler(req, res) {
       drawTextBox(p5, font, P.themes_para1, L.p5Text.th1);
       drawTextBox(p5, font, P.themes_para2, L.p5Text.th2);
 
+      // NEW: Deep dive + Themes questions
       drawTextBox(p5, font, P.dd_q1, L.p5Q.dd_q1);
       drawTextBox(p5, font, P.dd_q2, L.p5Q.dd_q2);
       drawTextBox(p5, font, P.th_q1, L.p5Q.th_q1);
       drawTextBox(p5, font, P.th_q2, L.p5Q.th_q2);
     }
 
-    /* ───────── PAGE 6 (UPDATED in V5) ───────── */
+    // Page 6
     if (p6) {
-      // Only the 2 WorkWith boxes
       drawTextBox(p6, font, P.workWith?.concealed, L.p6WorkWith.collabC);
       drawTextBox(p6, font, P.workWith?.triggered, L.p6WorkWith.collabT);
+      drawTextBox(p6, font, P.workWith?.regulated, L.p6WorkWith.collabR);
+      drawTextBox(p6, font, P.workWith?.lead,      L.p6WorkWith.collabL);
 
-      // Questions drawn into bottom template fields
+      // NEW: Adapt questions
       drawTextBox(p6, font, P.col_q1,  L.p6Q.col_q1);
       drawTextBox(p6, font, P.lead_q1, L.p6Q.lead_q1);
     }
-    /* ───────── END PAGE 6 (UPDATED) ───────── */
 
+    // Page 7
     if (p7) {
       drawTextBox(p7, font, P.Act1, L.p7Actions.act1);
       drawTextBox(p7, font, P.Act2, L.p7Actions.act2);
