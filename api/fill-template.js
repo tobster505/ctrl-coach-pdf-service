@@ -1,12 +1,17 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V5 · 12 templates + chart + 3 act boxes + QUESTION BOXES)
+ * CTRL Coach Export Service · fill-template (COACH V1 · 6 pages)
  *
- * Based on: COACH V4
- * V5 changes (ONLY):
- * - Page 6 now has ONLY 2 WorkWith boxes: collabC + collabT
- * - Page 6 questions are drawn in TWO dedicated bottom boxes (separate from WorkWith text)
- * - Removes any Page 6 draw calls for collabR/collabL
- * - Keeps question keys as p6Q.col_q1 + p6Q.lead_q1 (so Gen JSON mapping does not change)
+ * Based on fill-template V12.3 (user version) with COACH changes:
+ * a) exec_summary -> page 2
+ * b) ctrl_overview (+ chart) -> page 3
+ * c) ctrl_deepdive -> page 4
+ * d) themes -> page 4
+ * e) workwith colleagues -> page 5 (collabC coords provided)
+ * f) workwith leaders -> page 5 (collabT coords provided)
+ * g) ONLY render header fullName on page 6
+ * h) total pages = 6 (remove any refs to page 7+ / actions)
+ *
+ * Reference template code: fill-template v12.3.txt :contentReference[oaicite:0]{index=0}
  */
 
 export const config = { runtime: "nodejs" };
@@ -16,48 +21,16 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-/* ───────── template naming (COACH) ───────── */
-const TEMPLATE_PREFIX = "CTRL_PoC_Coach_Assessment_Profile_template_";
-
 /* ───────────── small utils ───────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
+const okArr = (a) => Array.isArray(a);
 
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
   catch { return { _error: "Could not serialise debug object" }; }
-}
-
-/* ───────── WinAnsi-safe text normaliser (V4) ───────── */
-function winAnsiSafe(input) {
-  let s = String(input ?? "");
-
-  // Hyphens / dashes
-  s = s
-    .replace(/\u2010/g, "-")  // ‐ hyphen
-    .replace(/\u2011/g, "-")  // non-breaking hyphen
-    .replace(/\u2012/g, "-")  // figure dash
-    .replace(/\u2013/g, "-")  // en dash
-    .replace(/\u2014/g, "-")  // em dash
-    .replace(/\u2212/g, "-"); // minus sign
-
-  // Quotes
-  s = s
-    .replace(/\u2018|\u2019|\u201A|\u201B/g, "'") // ‘ ’ ‚ ‛
-    .replace(/\u201C|\u201D|\u201E|\u201F/g, '"'); // “ ” „ ‟
-
-  // Ellipsis
-  s = s.replace(/\u2026/g, "..."); // …
-
-  // Spaces
-  s = s
-    .replace(/\u00A0/g, " ") // non-breaking space
-    .replace(/\u2007/g, " ")
-    .replace(/\u202F/g, " ");
-
-  return s;
 }
 
 /* ───────── filename helpers ───────── */
@@ -109,7 +82,7 @@ function makeOutputFilename(fullName, dateLbl) {
 
 /* ───────── text wrapping + drawing ───────── */
 function wrapText(font, text, size, w) {
-  const raw = winAnsiSafe(S(text)); // V4
+  const raw = S(text);
   const paragraphs = raw.split("\n");
   const lines = [];
   for (const para of paragraphs) {
@@ -130,7 +103,7 @@ function wrapText(font, text, size, w) {
 
 function drawTextBox(page, font, text, box, opts = {}) {
   if (!page || !font || !box) return;
-  const t0 = winAnsiSafe(S(text)); // V4
+  const t0 = S(text);
   if (!t0.trim()) return;
 
   const pageH = page.getHeight();
@@ -146,6 +119,7 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
+  // Auto-expand height so maxLines can actually render.
   const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
   if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
     const lineHeight = size + lineGap;
@@ -186,28 +160,6 @@ function splitToTwoParas(s) {
     return [sentences.slice(0, mid).join(" ").trim(), sentences.slice(mid).join(" ").trim()];
   }
   return [raw, ""];
-}
-
-function splitToThreeChunks(s) {
-  const raw = S(s).replace(/\r/g, "").trim();
-  if (!raw) return ["", "", ""];
-
-  const paras = raw.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  if (paras.length >= 3) return [paras[0], paras[1], paras.slice(2).join("\n\n")];
-  if (paras.length === 2) return [paras[0], paras[1], ""];
-
-  const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
-  if (sentences.length >= 3) {
-    const n = sentences.length;
-    const a = Math.ceil(n / 3);
-    const b = Math.ceil((n - a) / 2);
-    const s1 = sentences.slice(0, a).join(" ").trim();
-    const s2 = sentences.slice(a, a + b).join(" ").trim();
-    const s3 = sentences.slice(a + b).join(" ").trim();
-    return [s1, s2, s3];
-  }
-
-  return [raw, "", ""];
 }
 
 /* ───────── template loader ───────── */
@@ -294,8 +246,7 @@ function computeDomAndSecondKeys(P) {
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
-/* ───────── chart embed (UNCHANGED) ───────── */
-// (kept exactly as your V2)
+/* ───────── chart embed (V9 polar area) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
   const keys = [
     "C_low","C_mid","C_high",
@@ -406,7 +357,7 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT ───────── */
+/* ───────── DEFAULT LAYOUT (COACH · 6 pages) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
@@ -414,81 +365,41 @@ const DEFAULT_LAYOUT = {
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p5: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    // Only page 6 needs header fullName
     p6: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p7: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
+    // Reuse existing box sets (naming unchanged) for text placement:
+    // - p3Text used for exec
+    // - p4Text used for overview + chart
+    // - p5Text used for deepdive + themes
     p3Text: {
-      exec1: { x: 25, y: 360, w: 550, h: 250, size: 14, align: "left", maxLines: 13 },
-      exec2: { x: 25, y: 520, w: 550, h: 420, size: 14, align: "left", maxLines: 22 },
+      exec1: { x: 25, y: 380, w: 550, h: 250, size: 16, align: "left", maxLines: 13 },
+      exec2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 22 },
     },
 
     p4Text: {
-      ov1: { x: 25, y: 160, w: 200, h: 240, size: 14, align: "left", maxLines: 25 },
-      ov2: { x: 25, y: 520, w: 550, h: 420, size: 14, align: "left", maxLines: 23 },
+      ov1: { x: 25, y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 30 },
+      ov2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 23 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
     p5Text: {
-      dd1: { x: 25, y: 140, w: 550, h: 240, size: 13, align: "left", maxLines: 13 },
-      dd2: { x: 25, y: 240, w: 550, h: 310, size: 13, align: "left", maxLines: 17 },
-      th1: { x: 25, y: 540, w: 550, h: 160, size: 13, align: "left", maxLines: 9 },
-      th2: { x: 25, y: 620, w: 550, h: 160, size: 13, align: "left", maxLines: 9 },
+      dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
+      dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
+      th1: { x: 25, y: 540, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
+      th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
     },
 
-    /* ───────── PAGE 6 (UPDATED in V5) ───────── */
-    // Only 2 WorkWith boxes now: colleagues + leaders
+    // Page 5 "workwith" (coach): ONLY colleagues + leaders
     p6WorkWith: {
-      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
-      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
-    },
-
-    // Two bottom question boxes (separate from WorkWith paragraphs)
-    p6Q: {
-      // left-bottom question
-      col_q1:  { x: 30, y: 550, w: 270, h: 40, size: 14, align: "left", maxLines: 2 },
-      // right-bottom question
-      lead_q1: { x: 320, y: 550, w: 260, h: 40, size: 14, align: "left", maxLines: 2 },
-    },
-    /* ───────── END PAGE 6 (UPDATED) ───────── */
-
-    p7Actions: {
-      act1: { x: 50, y: 380, w: 440, h: 95, size: 16, align: "left", maxLines: 5 },
-      act2: { x: 100, y: 530, w: 440, h: 95, size: 16, align: "left", maxLines: 5 },
-      act3: { x: 50, y: 670, w: 440, h: 95, size: 16, align: "left", maxLines: 5 },
-    },
-
-    /* ───────── NEW: Coach questions layout blocks ───────── */
-
-    // Page 3: Exec Summary (4 questions)
-    p3Q: {
-      exec_q1: { x: 25, y: 630, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
-      exec_q2: { x: 25, y: 670, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
-      exec_q3: { x: 25, y: 710, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
-      exec_q4: { x: 25, y: 750, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
-    },
-
-    // Page 4: Overview (2 questions)
-    p4Q: {
-      ov_q1: { x: 25, y: 650, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
-      ov_q2: { x: 25, y: 700, w: 550, h: 40, size: 14, align: "left", maxLines: 2 },
-    },
-
-    // Page 5: Deep dive (2) + Themes (2)
-    p5Q: {
-      dd_q1: { x: 25, y: 310, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
-      dd_q2: { x: 25, y: 350, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
-      th_q1: { x: 25, y: 710, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
-      th_q2: { x: 25, y: 750, w: 550, h: 40, size: 13, align: "left", maxLines: 2 },
+      // NEW coords supplied (size 14)
+      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 }, // colleagues
+      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 }, // leaders
     },
   },
 };
 
-/* ───────── URL layout overrides (FIX: support box keys with underscores) ───────── */
+/* ───────── URL layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
   const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
   const applied = [];
@@ -501,61 +412,49 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     if (bits.length < 4) { ignored.push({ k, v, why: "bad_key_shape" }); continue; }
 
     const pageKey = bits[1];
-    const prop = bits[bits.length - 1];
-    const boxKey = bits.slice(2, bits.length - 1).join("_");
+    const boxKey = bits[2];
+    const prop = bits.slice(3).join("_");
 
-    if (!layoutPages?.[pageKey]) {
-      ignored.push({ k, v, why: "unknown_page", pageKey });
-      continue;
-    }
-    if (!layoutPages?.[pageKey]?.[boxKey]) {
-      ignored.push({ k, v, why: "unknown_box", pageKey, boxKey });
-      continue;
-    }
-    if (!allowed.has(prop)) {
-      ignored.push({ k, v, why: "unsupported_prop", prop });
-      continue;
-    }
+    if (!layoutPages?.[pageKey]) { ignored.push({ k, v, why: "unknown_page", pageKey }); continue; }
+    if (!layoutPages?.[pageKey]?.[boxKey]) { ignored.push({ k, v, why: "unknown_box", pageKey, boxKey }); continue; }
+    if (!allowed.has(prop)) { ignored.push({ k, v, why: "unsupported_prop", prop }); continue; }
 
     if (prop === "align") {
       const a0 = String(v || "").toLowerCase();
       const a = (a0 === "centre") ? "center" : a0;
-      if (!["left", "center", "right"].includes(a)) {
-        ignored.push({ k, v, why: "bad_align", got: a0 });
-        continue;
-      }
+      if (!["left", "center", "right"].includes(a)) { ignored.push({ k, v, why: "bad_align", got: a0 }); continue; }
       layoutPages[pageKey][boxKey][prop] = a;
       applied.push({ k, v, pageKey, boxKey, prop });
       continue;
     }
 
     const num = Number(v);
-    if (!Number.isFinite(num)) {
-      ignored.push({ k, v, why: "not_a_number" });
-      continue;
-    }
+    if (!Number.isFinite(num)) { ignored.push({ k, v, why: "not_a_number" }); continue; }
 
-    layoutPages[pageKey][boxKey][prop] =
-      (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
-
+    layoutPages[pageKey][boxKey][prop] = (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
     applied.push({ k, v, pageKey, boxKey, prop });
   }
 
   return { applied, ignored, layoutPages };
 }
 
-/* ───────── question formatter (BULLET POINTS) ───────── */
-function bulletQ(s) {
-  const t = winAnsiSafe(S(s)).replace(/\r/g, "").trim(); // V4
-  if (!t) return "";
-  if (t.startsWith("•")) return norm(t);
-  return `• ${norm(t)}`;
+/* ───────── input normaliser (COACH) ───────── */
+function buildWorkWithBlock(title, para, qArr) {
+  const t = [];
+  const p0 = S(para).trim();
+  if (p0) t.push(p0);
+
+  const qs = (qArr || []).map((x) => S(x).trim()).filter(Boolean);
+  for (const q of qs) t.push(q);
+
+  // Single block, line breaks for wrapping
+  return t.join("\n");
 }
 
-/* ───────── input normaliser (COACH) ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
+  const workWith = okObj(d.workWith) ? d.workWith : {};
   const ctrl = okObj(d.ctrl) ? d.ctrl : {};
   const summary = okObj(ctrl.summary) ? ctrl.summary : {};
 
@@ -563,23 +462,48 @@ function normaliseInput(d = {}) {
   const dateLabel = S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
 
   const bandsRaw =
-    (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
-    (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
     (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
+    (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
+    (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
     {};
 
-  const [execA, execB] = splitToTwoParas(S(text.exec_summary || ""));
-  const [ovA, ovB] = splitToTwoParas(S(text.ctrl_overview || ""));
-  const [ddA, ddB] = splitToTwoParas(S(text.ctrl_deepdive || ""));
-  const [thA, thB] = splitToTwoParas(S(text.themes || ""));
+  // Exec / Overview / DeepDive / Themes (still support 2-para split, but coach is 1 para)
+  const execBlock = S(text.exec_summary || "");
+  const [execA, execB] = splitToTwoParas(execBlock);
 
-  const adaptC = S(text.adapt_with_colleagues || "");
-  const adaptL = S(text.adapt_with_leaders || "");
+  const ovBlock = S(text.ctrl_overview || "");
+  const [ovA, ovB] = splitToTwoParas(ovBlock);
 
-  // Actions
-  const act1 = S(d.Act1 || text.actions1 || "");
-  const act2 = S(d.Act2 || text.actions2 || "");
-  const act3 = S(d.Act3 || text.actions3 || "");
+  const ddBlock = S(text.ctrl_deepdive || "");
+  const [ddA, ddB] = splitToTwoParas(ddBlock);
+
+  const thBlock = S(text.themes || "");
+  const [thA, thB] = splitToTwoParas(thBlock);
+
+  // Coach "workwith" comes from text.* fields (preferred), with fallback to d.workWith
+  const colleaguesBlock =
+    buildWorkWithBlock(
+      "colleagues",
+      S(text.adapt_with_colleagues || workWith.colleagues || ""),
+      [
+        text.adapt_with_colleagues_q1,
+        text.adapt_with_colleagues_q2,
+        text.adapt_with_colleagues_q3,
+        text.adapt_with_colleagues_q4,
+      ]
+    );
+
+  const leadersBlock =
+    buildWorkWithBlock(
+      "leaders",
+      S(text.adapt_with_leaders || workWith.leaders || ""),
+      [
+        text.adapt_with_leaders_q1,
+        text.adapt_with_leaders_q2,
+        text.adapt_with_leaders_q3,
+        text.adapt_with_leaders_q4,
+      ]
+    );
 
   const chartUrl =
     S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
@@ -603,44 +527,21 @@ function normaliseInput(d = {}) {
     themes_para1: thA,
     themes_para2: thB,
 
-    // questions
-    exec_q1: bulletQ(text.exec_summary_q1),
-    exec_q2: bulletQ(text.exec_summary_q2),
-    exec_q3: bulletQ(text.exec_summary_q3),
-    exec_q4: bulletQ(text.exec_summary_q4),
-
-    ov_q1: bulletQ(text.ctrl_overview_q1),
-    ov_q2: bulletQ(text.ctrl_overview_q2),
-
-    dd_q1: bulletQ(text.ctrl_deepdive_q1),
-    dd_q2: bulletQ(text.ctrl_deepdive_q2),
-
-    th_q1: bulletQ(text.themes_q1),
-    th_q2: bulletQ(text.themes_q2),
-
-    col_q1: bulletQ(text.adapt_with_colleagues_q1),
-
-    // schema uses adapt_with_leaders_q2 for the single leader question
-    lead_q1: bulletQ(text.adapt_with_leaders_q2),
-
+    // Coach workwith (page 5)
     workWith: {
-      concealed: adaptC,
-      triggered: adaptL,
+      colleagues: colleaguesBlock,
+      leaders: leadersBlock,
     },
-
-    Act1: act1,
-    Act2: act2,
-    Act3: act3,
 
     chartUrl,
   };
 }
 
-/* ───────── debug probe ───────── */
-function buildProbe(P, domSecond, tpl, ov) {
+/* ───────── debug probe (COACH) ───────── */
+function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
-    where: "fill-template:COACH:debug",
+    where: "fill-template:COACH_V1:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
     identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
@@ -653,30 +554,19 @@ function buildProbe(P, domSecond, tpl, ov) {
       dd2: S(P.ctrl_deepdive_para2).length,
       th1: S(P.themes_para1).length,
       th2: S(P.themes_para2).length,
-      adapt_colleagues: S(P.workWith?.concealed).length,
-      adapt_leaders: S(P.workWith?.triggered).length,
-      act1: S(P.Act1).length,
-      act2: S(P.Act2).length,
-      act3: S(P.Act3).length,
-
-      exec_q1: S(P.exec_q1).length,
-      exec_q2: S(P.exec_q2).length,
-      exec_q3: S(P.exec_q3).length,
-      exec_q4: S(P.exec_q4).length,
-      ov_q1: S(P.ov_q1).length,
-      ov_q2: S(P.ov_q2).length,
-      dd_q1: S(P.dd_q1).length,
-      dd_q2: S(P.dd_q2).length,
-      th_q1: S(P.th_q1).length,
-      th_q2: S(P.th_q2).length,
-      col_q1: S(P.col_q1).length,
-      lead_q1: S(P.lead_q1).length,
+      workwith_colleagues: S(P.workWith?.colleagues).length,
+      workwith_leaders: S(P.workWith?.leaders).length,
     },
     layoutOverrides: {
       appliedCount: ov?.applied?.length || 0,
       ignoredCount: ov?.ignored?.length || 0,
       applied: ov?.applied || [],
       ignored: ov?.ignored || [],
+      resolvedExamples: {
+        p6WorkWith_collabC: safeJson(L?.p6WorkWith?.collabC || {}),
+        p6WorkWith_collabT: safeJson(L?.p6WorkWith?.collabT || {}),
+        p6_hdrName: safeJson(L?.p6?.hdrName || {}),
+      },
     },
   };
 }
@@ -692,27 +582,22 @@ export default async function handler(req, res) {
 
     const domSecond = computeDomAndSecondKeys({
       raw: payload,
-      domKey: payload?.ctrl?.dominantKey || payload?.dominantKey,
-      secondKey: payload?.ctrl?.secondKey || payload?.secondKey
+      domKey: payload?.dominantKey,
+      secondKey: payload?.secondKey
     });
 
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
     const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
-
     const tpl = {
       combo: domSecond.templateKey,
       safeCombo,
-      tpl: `${TEMPLATE_PREFIX}${safeCombo}.pdf`
+      tpl: `CTRL_Coach_Profile_template_${safeCombo}.pdf`
     };
-
-    if (!DEFAULT_LAYOUT || !DEFAULT_LAYOUT.pages) {
-      throw new Error("DEFAULT_LAYOUT missing.");
-    }
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
     const ov = applyLayoutOverridesFromUrl(L, url);
 
-    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov));
+    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
 
     const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -722,79 +607,57 @@ export default async function handler(req, res) {
 
     const pages = pdfDoc.getPages();
 
-    // Page 1
-    if (pages[0]) {
-      drawTextBox(pages[0], fontB, P.identity.fullName, L.p1.name, { maxLines: 1 });
-      drawTextBox(pages[0], font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
+    // HARD: total pages = 6
+    // (We do not crash if template has more, we simply do not touch beyond p6)
+    const p1 = pages[0] || null;
+    const p2 = pages[1] || null; // exec_summary
+    const p3 = pages[2] || null; // overview + chart
+    const p4 = pages[3] || null; // deepdive + themes
+    const p5 = pages[4] || null; // workwith
+    const p6 = pages[5] || null; // legal (header name only)
+
+    // Page 1: name + date
+    if (p1) {
+      drawTextBox(p1, fontB, P.identity.fullName, L.p1.name, { maxLines: 1 });
+      drawTextBox(p1, font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
     }
 
-    // Header name pages 2–8
+    // Page 6 header name ONLY (per requirement g)
     const headerName = norm(P.identity.fullName);
-    if (headerName) {
-      for (let i = 1; i < Math.min(pages.length, 8); i++) {
-        const pk = `p${i + 1}`;
-        const box = L?.[pk]?.hdrName;
-        if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
-      }
+    if (headerName && p6 && L?.p6?.hdrName) {
+      drawTextBox(p6, font, headerName, L.p6.hdrName, { maxLines: 1 });
     }
 
-    const p3 = pages[2] || null;
-    const p4 = pages[3] || null;
-    const p5 = pages[4] || null;
-    const p6 = pages[5] || null;
-    const p7 = pages[6] || null;
+    // a) Exec summary -> page 2
+    if (p2) {
+      drawTextBox(p2, font, P.exec_summary_para1, L.p3Text.exec1);
+      drawTextBox(p2, font, P.exec_summary_para2, L.p3Text.exec2);
+    }
 
+    // b) Overview (+ chart) -> page 3
     if (p3) {
-      drawTextBox(p3, font, P.exec_summary_para1, L.p3Text.exec1);
-      drawTextBox(p3, font, P.exec_summary_para2, L.p3Text.exec2);
-
-      drawTextBox(p3, font, P.exec_q1, L.p3Q.exec_q1);
-      drawTextBox(p3, font, P.exec_q2, L.p3Q.exec_q2);
-      drawTextBox(p3, font, P.exec_q3, L.p3Q.exec_q3);
-      drawTextBox(p3, font, P.exec_q4, L.p3Q.exec_q4);
-    }
-
-    if (p4) {
-      drawTextBox(p4, font, P.ctrl_overview_para1, L.p4Text.ov1);
-      drawTextBox(p4, font, P.ctrl_overview_para2, L.p4Text.ov2);
+      drawTextBox(p3, font, P.ctrl_overview_para1, L.p4Text.ov1);
+      drawTextBox(p3, font, P.ctrl_overview_para2, L.p4Text.ov2);
       try {
-        await embedRadarFromBandsOrUrl(pdfDoc, p4, L.p4Text.chart, P.bands || {}, P.chartUrl);
+        await embedRadarFromBandsOrUrl(pdfDoc, p3, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:COACH] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:COACH_V1] Chart skipped:", e?.message || String(e));
       }
-
-      drawTextBox(p4, font, P.ov_q1, L.p4Q.ov_q1);
-      drawTextBox(p4, font, P.ov_q2, L.p4Q.ov_q2);
     }
 
+    // c) Deepdive -> page 4
+    // d) Themes -> page 4
+    if (p4) {
+      drawTextBox(p4, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
+      drawTextBox(p4, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
+      drawTextBox(p4, font, P.themes_para1, L.p5Text.th1);
+      drawTextBox(p4, font, P.themes_para2, L.p5Text.th2);
+    }
+
+    // e/f) Workwith colleagues/leaders -> page 5
     if (p5) {
-      drawTextBox(p5, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
-      drawTextBox(p5, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
-      drawTextBox(p5, font, P.themes_para1, L.p5Text.th1);
-      drawTextBox(p5, font, P.themes_para2, L.p5Text.th2);
-
-      drawTextBox(p5, font, P.dd_q1, L.p5Q.dd_q1);
-      drawTextBox(p5, font, P.dd_q2, L.p5Q.dd_q2);
-      drawTextBox(p5, font, P.th_q1, L.p5Q.th_q1);
-      drawTextBox(p5, font, P.th_q2, L.p5Q.th_q2);
-    }
-
-    /* ───────── PAGE 6 (UPDATED in V5) ───────── */
-    if (p6) {
-      // Only the 2 WorkWith boxes
-      drawTextBox(p6, font, P.workWith?.concealed, L.p6WorkWith.collabC);
-      drawTextBox(p6, font, P.workWith?.triggered, L.p6WorkWith.collabT);
-
-      // Questions drawn into bottom template fields
-      drawTextBox(p6, font, P.col_q1,  L.p6Q.col_q1);
-      drawTextBox(p6, font, P.lead_q1, L.p6Q.lead_q1);
-    }
-    /* ───────── END PAGE 6 (UPDATED) ───────── */
-
-    if (p7) {
-      drawTextBox(p7, font, P.Act1, L.p7Actions.act1);
-      drawTextBox(p7, font, P.Act2, L.p7Actions.act2);
-      drawTextBox(p7, font, P.Act3, L.p7Actions.act3);
+      drawTextBox(p5, font, P.workWith?.colleagues, L.p6WorkWith.collabC);
+      drawTextBox(p5, font, P.workWith?.leaders,    L.p6WorkWith.collabT);
     }
 
     const outBytes = await pdfDoc.save();
@@ -805,7 +668,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:COACH] CRASH", err);
+    console.error("[fill-template:COACH_V1] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
