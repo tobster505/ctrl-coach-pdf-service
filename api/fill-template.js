@@ -1,13 +1,17 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V2 · 6 pages)
+ * CTRL Coach PDF Service · fill-template (COACH V2.1 · 6 pages)
  *
- * Fixes vs COACH V1:
- * - Reads dom/second from payload.ctrl.dominantKey + payload.ctrl.secondKey (NOT top-level)
- * - computeDomAndSecondKeys() now also checks raw.ctrl.* for robustness
- * - Keeps 6-page behaviour, new workwith blocks on page 5, header name on page 6 only
- * - No references to pages 7+
+ * Fixes in this version:
+ * 1) ✅ Template filename prefix UPDATED to match your repo:
+ *    /public/CTRL_PoC_Coach_Assessment_Profile_template_<COMBO>.pdf
+ * 2) ✅ Uses payload.ctrl.dominantKey + payload.ctrl.secondKey (and robust fallbacks)
+ * 3) ✅ 6 pages only (no refs to 7+)
+ * 4) ✅ Exec_summary page 2, Overview page 3, Deepdive + Themes page 4
+ * 5) ✅ Workwith colleagues + leaders on page 5 (your new coords)
+ * 6) ✅ Only FullName header on page 6
  *
- * Source reference: fill-template coach.txt :contentReference[oaicite:0]{index=0}
+ * NOTE:
+ * - If a combo template is missing, it will fall back to CT automatically.
  */
 
 export const config = { runtime: "nodejs" };
@@ -17,7 +21,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-/* ───────────── small utils ───────────── */
+/* ───────────── utils ───────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
@@ -179,7 +183,7 @@ async function loadTemplateBytesLocal(fname) {
   );
 }
 
-/* ───────── payload parsing ───────── */
+/* ───────── payload reading ───────── */
 async function readPayload(req) {
   if (req.method === "POST") {
     const chunks = [];
@@ -214,10 +218,6 @@ function resolveStateKey(any) {
   return null;
 }
 
-/**
- * COACH V2 FIX:
- * This now checks raw.ctrl.* as well (payload.ctrl.dominantKey/secondKey).
- */
 function computeDomAndSecondKeys(P) {
   const raw = P.raw || {};
   const ctrl = okObj(raw.ctrl) ? raw.ctrl : {};
@@ -225,7 +225,7 @@ function computeDomAndSecondKeys(P) {
 
   const domKey =
     resolveStateKey(P.domKey) ||
-    resolveStateKey(ctrl.dominantKey) ||      // ✅ NEW
+    resolveStateKey(ctrl.dominantKey) ||
     resolveStateKey(raw.dominantKey) ||
     resolveStateKey(summary.dominant) ||
     resolveStateKey(summary.domState) ||
@@ -235,7 +235,7 @@ function computeDomAndSecondKeys(P) {
 
   const secondKey =
     resolveStateKey(P.secondKey) ||
-    resolveStateKey(ctrl.secondKey) ||        // ✅ NEW
+    resolveStateKey(ctrl.secondKey) ||
     resolveStateKey(raw.secondKey) ||
     resolveStateKey(summary.secondState) ||
     resolveStateKey(ctrl.secondState) ||
@@ -244,7 +244,7 @@ function computeDomAndSecondKeys(P) {
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
-/* ───────── chart embed (V9 polar area) ───────── */
+/* ───────── chart embed (polar area) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
   const keys = [
     "C_low","C_mid","C_high",
@@ -317,8 +317,6 @@ function makeSpiderChartUrl12(bandsRaw) {
 }
 
 async function embedRemoteImage(pdfDoc, url) {
-  if (!url) return null;
-
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch chart: ${res.status} ${res.statusText}`);
 
@@ -366,20 +364,20 @@ const DEFAULT_LAYOUT = {
     // Only page 6 needs header fullName
     p6: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Page 2 content uses p3Text boxes (same coordinates)
+    // Page 2 content (exec) uses p3Text boxes
     p3Text: {
       exec1: { x: 25, y: 380, w: 550, h: 250, size: 16, align: "left", maxLines: 13 },
       exec2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 22 },
     },
 
-    // Page 3 content uses p4Text boxes
+    // Page 3 content (overview + chart) uses p4Text boxes
     p4Text: {
       ov1: { x: 25, y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 30 },
       ov2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 23 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
-    // Page 4 content uses p5Text boxes
+    // Page 4 content (deepdive + themes) uses p5Text boxes
     p5Text: {
       dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
       dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
@@ -507,8 +505,8 @@ function normaliseInput(d = {}) {
 function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
-    where: "fill-template:COACH_V2:debug",
-    template: tpl,
+    where: "fill-template:COACH_V2.1:debug",
+    template: safeJson(tpl),
     domSecond: safeJson(domSecond),
     identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
     textLengths: {
@@ -546,35 +544,61 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
-    // ✅ COACH V2 FIX: dom/second fed from payload.ctrl.*, not payload top-level
+    // ✅ dom/second: explicit from payload.ctrl.* (and compute function checks raw.ctrl.* too)
     const domSecond = computeDomAndSecondKeys({
       raw: payload,
       domKey: payload?.ctrl?.dominantKey,
       secondKey: payload?.ctrl?.secondKey
     });
 
+    // ── TEMPLATE RESOLUTION (UPDATED PREFIX) ──────────────────────────────
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
-    const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
-    const tpl = {
-      combo: domSecond.templateKey,
-      safeCombo,
-      tpl: `CTRL_Coach_Profile_template_${safeCombo}.pdf`
-    };
+
+    const primaryCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
+    const payloadCombo = String(payload?.ctrl?.templateKey || "").toUpperCase();
+    const preferredCombo = validCombos.has(payloadCombo) ? payloadCombo : primaryCombo;
+
+    const comboCandidates = Array.from(new Set([preferredCombo, primaryCombo, "CT"]));
+
+    const TEMPLATE_PREFIX = "CTRL_PoC_Coach_Assessment_Profile_template_";
+
+    let templateFilename = "";
+    let pdfBytes = null;
+    const tried = [];
+
+    for (const combo of comboCandidates) {
+      const fname = `${TEMPLATE_PREFIX}${combo}.pdf`;
+      tried.push(fname);
+      try {
+        pdfBytes = await loadTemplateBytesLocal(fname);
+        templateFilename = fname;
+        break;
+      } catch (e) {
+        // keep trying
+      }
+    }
+
+    if (!pdfBytes) {
+      throw new Error(`Template not found. Tried: ${tried.join(" | ")}`);
+    }
+
+    const tpl = { templateFilename, tried, comboCandidates };
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
     const ov = applyLayoutOverridesFromUrl(L, url);
 
     if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
 
-    const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
+    // Load template
     const pdfDoc = await PDFDocument.load(pdfBytes);
 
+    // Fonts
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     const pages = pdfDoc.getPages();
 
-    // HARD: total pages = 6 (ignore anything beyond)
+    // total pages = 6
     const p1 = pages[0] || null;
     const p2 = pages[1] || null; // exec_summary
     const p3 = pages[2] || null; // overview + chart
@@ -594,24 +618,25 @@ export default async function handler(req, res) {
       drawTextBox(p6, font, headerName, L.p6.hdrName, { maxLines: 1 });
     }
 
-    // Page 2: Exec summary (uses p3Text boxes)
+    // Page 2: Exec summary
     if (p2) {
       drawTextBox(p2, font, P.exec_summary_para1, L.p3Text.exec1);
       drawTextBox(p2, font, P.exec_summary_para2, L.p3Text.exec2);
     }
 
-    // Page 3: Overview + chart (uses p4Text boxes)
+    // Page 3: Overview + chart
     if (p3) {
       drawTextBox(p3, font, P.ctrl_overview_para1, L.p4Text.ov1);
       drawTextBox(p3, font, P.ctrl_overview_para2, L.p4Text.ov2);
+
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p3, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:COACH_V2] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:COACH_V2.1] Chart skipped:", e?.message || String(e));
       }
     }
 
-    // Page 4: Deepdive + Themes (uses p5Text boxes)
+    // Page 4: Deepdive + Themes
     if (p4) {
       drawTextBox(p4, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
       drawTextBox(p4, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
@@ -633,7 +658,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:COACH_V2] CRASH", err);
+    console.error("[fill-template:COACH_V2.1] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
