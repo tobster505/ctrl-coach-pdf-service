@@ -1,17 +1,13 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V1 · 6 pages)
+ * CTRL Coach Export Service · fill-template (COACH V2 · 6 pages)
  *
- * Based on fill-template V12.3 (user version) with COACH changes:
- * a) exec_summary -> page 2
- * b) ctrl_overview (+ chart) -> page 3
- * c) ctrl_deepdive -> page 4
- * d) themes -> page 4
- * e) workwith colleagues -> page 5 (collabC coords provided)
- * f) workwith leaders -> page 5 (collabT coords provided)
- * g) ONLY render header fullName on page 6
- * h) total pages = 6 (remove any refs to page 7+ / actions)
+ * Fixes vs COACH V1:
+ * - Reads dom/second from payload.ctrl.dominantKey + payload.ctrl.secondKey (NOT top-level)
+ * - computeDomAndSecondKeys() now also checks raw.ctrl.* for robustness
+ * - Keeps 6-page behaviour, new workwith blocks on page 5, header name on page 6 only
+ * - No references to pages 7+
  *
- * Reference template code: fill-template v12.3.txt :contentReference[oaicite:0]{index=0}
+ * Source reference: fill-template coach.txt :contentReference[oaicite:0]{index=0}
  */
 
 export const config = { runtime: "nodejs" };
@@ -26,7 +22,6 @@ const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
-const okArr = (a) => Array.isArray(a);
 
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
@@ -107,7 +102,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   if (!t0.trim()) return;
 
   const pageH = page.getHeight();
-
   const size = N(opts.size ?? box.size ?? 12);
   const lineGap = N(opts.lineGap ?? box.lineGap ?? 2);
   const maxLines = N(opts.maxLines ?? box.maxLines ?? 999);
@@ -119,7 +113,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
-  // Auto-expand height so maxLines can actually render.
   const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
   if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
     const lineHeight = size + lineGap;
@@ -128,7 +121,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   }
 
   const y = pageH - N(box.y) - h;
-
   const innerW = Math.max(0, w - pad * 2);
   const lines = wrapText(font, t0.replace(/\r/g, ""), size, innerW).slice(0, maxLines);
 
@@ -222,25 +214,31 @@ function resolveStateKey(any) {
   return null;
 }
 
+/**
+ * COACH V2 FIX:
+ * This now checks raw.ctrl.* as well (payload.ctrl.dominantKey/secondKey).
+ */
 function computeDomAndSecondKeys(P) {
   const raw = P.raw || {};
-  const ctrl = raw.ctrl || {};
-  const summary = (ctrl.summary || raw.ctrl?.summary || {}) || {};
+  const ctrl = okObj(raw.ctrl) ? raw.ctrl : {};
+  const summary = okObj(ctrl.summary) ? ctrl.summary : {};
 
   const domKey =
     resolveStateKey(P.domKey) ||
+    resolveStateKey(ctrl.dominantKey) ||      // ✅ NEW
     resolveStateKey(raw.dominantKey) ||
     resolveStateKey(summary.dominant) ||
     resolveStateKey(summary.domState) ||
-    resolveStateKey(raw.ctrl?.dominant) ||
+    resolveStateKey(ctrl.dominant) ||
     resolveStateKey(raw.domState) ||
     "R";
 
   const secondKey =
     resolveStateKey(P.secondKey) ||
+    resolveStateKey(ctrl.secondKey) ||        // ✅ NEW
     resolveStateKey(raw.secondKey) ||
     resolveStateKey(summary.secondState) ||
-    resolveStateKey(raw.secondState) ||
+    resolveStateKey(ctrl.secondState) ||
     (domKey === "R" ? "T" : "R");
 
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
@@ -368,21 +366,20 @@ const DEFAULT_LAYOUT = {
     // Only page 6 needs header fullName
     p6: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Reuse existing box sets (naming unchanged) for text placement:
-    // - p3Text used for exec
-    // - p4Text used for overview + chart
-    // - p5Text used for deepdive + themes
+    // Page 2 content uses p3Text boxes (same coordinates)
     p3Text: {
       exec1: { x: 25, y: 380, w: 550, h: 250, size: 16, align: "left", maxLines: 13 },
       exec2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 22 },
     },
 
+    // Page 3 content uses p4Text boxes
     p4Text: {
       ov1: { x: 25, y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 30 },
       ov2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 23 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
+    // Page 4 content uses p5Text boxes
     p5Text: {
       dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
       dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
@@ -390,11 +387,10 @@ const DEFAULT_LAYOUT = {
       th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
     },
 
-    // Page 5 "workwith" (coach): ONLY colleagues + leaders
+    // Page 5 workwith blocks
     p6WorkWith: {
-      // NEW coords supplied (size 14)
-      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 }, // colleagues
-      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 }, // leaders
+      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
   },
 };
@@ -439,7 +435,7 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
 }
 
 /* ───────── input normaliser (COACH) ───────── */
-function buildWorkWithBlock(title, para, qArr) {
+function buildWorkWithBlock(para, qArr) {
   const t = [];
   const p0 = S(para).trim();
   if (p0) t.push(p0);
@@ -447,14 +443,12 @@ function buildWorkWithBlock(title, para, qArr) {
   const qs = (qArr || []).map((x) => S(x).trim()).filter(Boolean);
   for (const q of qs) t.push(q);
 
-  // Single block, line breaks for wrapping
   return t.join("\n");
 }
 
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
-  const workWith = okObj(d.workWith) ? d.workWith : {};
   const ctrl = okObj(d.ctrl) ? d.ctrl : {};
   const summary = okObj(ctrl.summary) ? ctrl.summary : {};
 
@@ -467,43 +461,20 @@ function normaliseInput(d = {}) {
     (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
     {};
 
-  // Exec / Overview / DeepDive / Themes (still support 2-para split, but coach is 1 para)
-  const execBlock = S(text.exec_summary || "");
-  const [execA, execB] = splitToTwoParas(execBlock);
+  const [execA, execB] = splitToTwoParas(S(text.exec_summary || ""));
+  const [ovA, ovB] = splitToTwoParas(S(text.ctrl_overview || ""));
+  const [ddA, ddB] = splitToTwoParas(S(text.ctrl_deepdive || ""));
+  const [thA, thB] = splitToTwoParas(S(text.themes || ""));
 
-  const ovBlock = S(text.ctrl_overview || "");
-  const [ovA, ovB] = splitToTwoParas(ovBlock);
+  const colleaguesBlock = buildWorkWithBlock(
+    S(text.adapt_with_colleagues || ""),
+    [text.adapt_with_colleagues_q1, text.adapt_with_colleagues_q2, text.adapt_with_colleagues_q3, text.adapt_with_colleagues_q4]
+  );
 
-  const ddBlock = S(text.ctrl_deepdive || "");
-  const [ddA, ddB] = splitToTwoParas(ddBlock);
-
-  const thBlock = S(text.themes || "");
-  const [thA, thB] = splitToTwoParas(thBlock);
-
-  // Coach "workwith" comes from text.* fields (preferred), with fallback to d.workWith
-  const colleaguesBlock =
-    buildWorkWithBlock(
-      "colleagues",
-      S(text.adapt_with_colleagues || workWith.colleagues || ""),
-      [
-        text.adapt_with_colleagues_q1,
-        text.adapt_with_colleagues_q2,
-        text.adapt_with_colleagues_q3,
-        text.adapt_with_colleagues_q4,
-      ]
-    );
-
-  const leadersBlock =
-    buildWorkWithBlock(
-      "leaders",
-      S(text.adapt_with_leaders || workWith.leaders || ""),
-      [
-        text.adapt_with_leaders_q1,
-        text.adapt_with_leaders_q2,
-        text.adapt_with_leaders_q3,
-        text.adapt_with_leaders_q4,
-      ]
-    );
+  const leadersBlock = buildWorkWithBlock(
+    S(text.adapt_with_leaders || ""),
+    [text.adapt_with_leaders_q1, text.adapt_with_leaders_q2, text.adapt_with_leaders_q3, text.adapt_with_leaders_q4]
+  );
 
   const chartUrl =
     S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
@@ -527,12 +498,7 @@ function normaliseInput(d = {}) {
     themes_para1: thA,
     themes_para2: thB,
 
-    // Coach workwith (page 5)
-    workWith: {
-      colleagues: colleaguesBlock,
-      leaders: leadersBlock,
-    },
-
+    workWith: { colleagues: colleaguesBlock, leaders: leadersBlock },
     chartUrl,
   };
 }
@@ -541,7 +507,7 @@ function normaliseInput(d = {}) {
 function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
-    where: "fill-template:COACH_V1:debug",
+    where: "fill-template:COACH_V2:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
     identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
@@ -580,10 +546,11 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
+    // ✅ COACH V2 FIX: dom/second fed from payload.ctrl.*, not payload top-level
     const domSecond = computeDomAndSecondKeys({
       raw: payload,
-      domKey: payload?.dominantKey,
-      secondKey: payload?.secondKey
+      domKey: payload?.ctrl?.dominantKey,
+      secondKey: payload?.ctrl?.secondKey
     });
 
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
@@ -607,8 +574,7 @@ export default async function handler(req, res) {
 
     const pages = pdfDoc.getPages();
 
-    // HARD: total pages = 6
-    // (We do not crash if template has more, we simply do not touch beyond p6)
+    // HARD: total pages = 6 (ignore anything beyond)
     const p1 = pages[0] || null;
     const p2 = pages[1] || null; // exec_summary
     const p3 = pages[2] || null; // overview + chart
@@ -622,31 +588,30 @@ export default async function handler(req, res) {
       drawTextBox(p1, font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
     }
 
-    // Page 6 header name ONLY (per requirement g)
+    // Page 6 header name ONLY
     const headerName = norm(P.identity.fullName);
     if (headerName && p6 && L?.p6?.hdrName) {
       drawTextBox(p6, font, headerName, L.p6.hdrName, { maxLines: 1 });
     }
 
-    // a) Exec summary -> page 2
+    // Page 2: Exec summary (uses p3Text boxes)
     if (p2) {
       drawTextBox(p2, font, P.exec_summary_para1, L.p3Text.exec1);
       drawTextBox(p2, font, P.exec_summary_para2, L.p3Text.exec2);
     }
 
-    // b) Overview (+ chart) -> page 3
+    // Page 3: Overview + chart (uses p4Text boxes)
     if (p3) {
       drawTextBox(p3, font, P.ctrl_overview_para1, L.p4Text.ov1);
       drawTextBox(p3, font, P.ctrl_overview_para2, L.p4Text.ov2);
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p3, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:COACH_V1] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:COACH_V2] Chart skipped:", e?.message || String(e));
       }
     }
 
-    // c) Deepdive -> page 4
-    // d) Themes -> page 4
+    // Page 4: Deepdive + Themes (uses p5Text boxes)
     if (p4) {
       drawTextBox(p4, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
       drawTextBox(p4, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
@@ -654,7 +619,7 @@ export default async function handler(req, res) {
       drawTextBox(p4, font, P.themes_para2, L.p5Text.th2);
     }
 
-    // e/f) Workwith colleagues/leaders -> page 5
+    // Page 5: Workwith colleagues + leaders
     if (p5) {
       drawTextBox(p5, font, P.workWith?.colleagues, L.p6WorkWith.collabC);
       drawTextBox(p5, font, P.workWith?.leaders,    L.p6WorkWith.collabT);
@@ -668,7 +633,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:COACH_V1] CRASH", err);
+    console.error("[fill-template:COACH_V2] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
