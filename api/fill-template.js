@@ -1,37 +1,19 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V1 · 6 pages)
- *
- * Based on fill-template V12.3 (user version) with COACH changes:
- * a) exec_summary -> page 2
- * b) ctrl_overview (+ chart) -> page 3
- * c) ctrl_deepdive -> page 4
- * d) themes -> page 4
- * e) workwith colleagues -> page 5 (collabC coords provided)
- * f) workwith leaders -> page 5 (collabT coords provided)
- * g) ONLY render header fullName on page 6
- * h) total pages = 6 (remove any refs to page 7+ / actions)
- *
- * Reference template code: fill-template v12.3.txt :contentReference[oaicite:0]{index=0}
+ * CTRL Coach PDF Service · fill-template (COACH)
+ * - Loads template from: <projectRoot>/public/CTRL_PoC_Coach_Assessment_Profile_template_<id>.pdf
+ * - Defaults template id to "v1" if none provided
  */
 
 export const config = { runtime: "nodejs" };
 
 import fs from "fs/promises";
 import path from "path";
-import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 /* ───────────── small utils ───────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
-const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
-const okArr = (a) => Array.isArray(a);
-
-function safeJson(obj) {
-  try { return JSON.parse(JSON.stringify(obj)); }
-  catch { return {}; }
-}
 
 function decodeBase64Json(b64) {
   try {
@@ -42,21 +24,12 @@ function decodeBase64Json(b64) {
   }
 }
 
-function clamp(v, min, max) {
-  v = N(v, min);
-  return Math.max(min, Math.min(max, v));
-}
-
 function splitToTwoParas(txt) {
   const t = S(txt || "").trim();
   if (!t) return ["", ""];
-  // Split on blank line if present
   const parts = t.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
   if (parts.length <= 1) return [t, ""];
-  // 2 parts max
-  const a = parts[0];
-  const b = parts.slice(1).join("\n\n");
-  return [a, b];
+  return [parts[0], parts.slice(1).join("\n\n")];
 }
 
 /* ───────────── text wrapping ───────────── */
@@ -99,7 +72,6 @@ function drawTextBlock(page, text, font, size, x, y, w, opts = {}) {
     const lineY = y - i * lh;
     const textX = x + (bullet ? bulletIndent : 0);
 
-    // bullet only on first line if requested
     if (bullet && i === 0) {
       page.drawText("•", { x, y: lineY, size, font, color: colour });
     }
@@ -113,55 +85,30 @@ function drawTextBlock(page, text, font, size, x, y, w, opts = {}) {
     page.drawText(line, { x: xAligned, y: lineY, size, font, color: colour });
   }
 
-  const remainingLines = lines.slice(used);
-  const remaining = remainingLines.join("\n");
-  return { usedLines: used, remaining };
+  return { usedLines: used, remaining: lines.slice(used).join("\n") };
 }
 
 function drawMultiBlockTwoParas(page, p1, p2, font, size, x, y, w, opts = {}) {
-  // Draw para1 then para2 (if any) with a small gap; return used height
   const lineGap = N(opts.lineGap, 2);
   const paraGap = N(opts.paraGap, 6);
   const colour = opts.colour || rgb(0.11, 0.11, 0.11);
   const align = opts.align || "left";
 
   let cursorY = y;
-  let usedTotal = 0;
 
   const a = drawTextBlock(page, p1, font, size, x, cursorY, w, { lineGap, colour, align });
-  usedTotal += a.usedLines;
   cursorY = cursorY - a.usedLines * (size + lineGap);
 
   if (S(p2 || "").trim()) {
     cursorY -= paraGap;
     const b = drawTextBlock(page, p2, font, size, x, cursorY, w, { lineGap, colour, align });
-    usedTotal += b.usedLines;
     cursorY = cursorY - b.usedLines * (size + lineGap);
   }
 
-  const usedHeight = y - cursorY;
-  return { usedHeight };
+  return { usedHeight: y - cursorY };
 }
 
 /* ───────────── Coach block builders ───────────── */
-function buildWorkWithBlock(title, para, qArr) {
-  const p0 = S(para).trim();
-  const qs = (qArr || []).map((x) => S(x).trim()).filter(Boolean);
-
-  if (!p0 && !qs.length) return "";
-
-  const lines = [];
-  if (p0) lines.push(p0);
-
-  if (qs.length) {
-    lines.push("Reflection questions:");
-    qs.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
-  }
-
-  // Single block, line breaks for wrapping
-  return lines.join("\n");
-}
-
 function buildCoachSectionBlock(paragraph, questions) {
   const p = S(paragraph || "").trim();
   const qs = (Array.isArray(questions) ? questions : [])
@@ -170,9 +117,26 @@ function buildCoachSectionBlock(paragraph, questions) {
 
   if (!p && !qs.length) return "";
 
-  // Avoid double-newlines so this stays as one block for wrapping.
+  // Avoid double-newlines so splitToTwoParas won't chop it into 2 paras.
   const lines = [];
   if (p) lines.push(p);
+
+  if (qs.length) {
+    lines.push("Reflection questions:");
+    qs.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
+  }
+
+  return lines.join("\n");
+}
+
+function buildWorkWithBlock(para, qArr) {
+  const p0 = S(para).trim();
+  const qs = (qArr || []).map((x) => S(x).trim()).filter(Boolean);
+
+  if (!p0 && !qs.length) return "";
+
+  const lines = [];
+  if (p0) lines.push(p0);
 
   if (qs.length) {
     lines.push("Reflection questions:");
@@ -193,92 +157,46 @@ function normaliseInput(d = {}) {
   const fullName = S(identity.fullName || d.fullName || d.FullName || summary?.identity?.fullName || "").trim();
   const dateLabel = S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
 
-  const bandsRaw =
-    (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
-    (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
-    (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
-    {};
+  // Main sections: paragraph + Qs
+  const execBlock = buildCoachSectionBlock(text.exec_summary || "", [
+    text.exec_summary_q1, text.exec_summary_q2, text.exec_summary_q3,
+    text.exec_summary_q4, text.exec_summary_q5, text.exec_summary_q6
+  ]);
 
-  // Exec / Overview / DeepDive / Themes
-  // Coach output needs: 1 paragraph + reflection questions (questions come from debug keys)
-  const execBlock = buildCoachSectionBlock(
-    text.exec_summary || "",
+  const ovBlock = buildCoachSectionBlock(text.ctrl_overview || "", [
+    text.ctrl_overview_q1, text.ctrl_overview_q2, text.ctrl_overview_q3,
+    text.ctrl_overview_q4, text.ctrl_overview_q5
+  ]);
+
+  const ddBlock = buildCoachSectionBlock(text.ctrl_deepdive || "", [
+    text.ctrl_deepdive_q1, text.ctrl_deepdive_q2, text.ctrl_deepdive_q3,
+    text.ctrl_deepdive_q4, text.ctrl_deepdive_q5, text.ctrl_deepdive_q6
+  ]);
+
+  const thBlock = buildCoachSectionBlock(text.themes || "", [
+    text.themes_q1, text.themes_q2, text.themes_q3, text.themes_q4, text.themes_q5
+  ]);
+
+  // Work-with blocks: paragraph + Qs for colleagues/leaders
+  const colleaguesBlock = buildWorkWithBlock(
+    S(text.adapt_with_colleagues || workWith.colleagues || ""),
     [
-      text.exec_summary_q1,
-      text.exec_summary_q2,
-      text.exec_summary_q3,
-      text.exec_summary_q4,
-      text.exec_summary_q5,
-      text.exec_summary_q6,
+      text.adapt_with_colleagues_q1,
+      text.adapt_with_colleagues_q2,
+      text.adapt_with_colleagues_q3,
+      text.adapt_with_colleagues_q4,
     ]
   );
-  const execA = execBlock;
-  const execB = "";
 
-  const ovBlock = buildCoachSectionBlock(
-    text.ctrl_overview || "",
+  const leadersBlock = buildWorkWithBlock(
+    S(text.adapt_with_leaders || workWith.leaders || ""),
     [
-      text.ctrl_overview_q1,
-      text.ctrl_overview_q2,
-      text.ctrl_overview_q3,
-      text.ctrl_overview_q4,
-      text.ctrl_overview_q5,
+      text.adapt_with_leaders_q1,
+      text.adapt_with_leaders_q2,
+      text.adapt_with_leaders_q3,
+      text.adapt_with_leaders_q4,
     ]
   );
-  const ovA = ovBlock;
-  const ovB = "";
-
-  const ddBlock = buildCoachSectionBlock(
-    text.ctrl_deepdive || "",
-    [
-      text.ctrl_deepdive_q1,
-      text.ctrl_deepdive_q2,
-      text.ctrl_deepdive_q3,
-      text.ctrl_deepdive_q4,
-      text.ctrl_deepdive_q5,
-      text.ctrl_deepdive_q6,
-    ]
-  );
-  const ddA = ddBlock;
-  const ddB = "";
-
-  const thBlock = buildCoachSectionBlock(
-    text.themes || "",
-    [
-      text.themes_q1,
-      text.themes_q2,
-      text.themes_q3,
-      text.themes_q4,
-      text.themes_q5,
-    ]
-  );
-  const thA = thBlock;
-  const thB = "";
-
-  // Coach "workwith" comes from text.* fields (preferred), with fallback to d.workWith
-  const colleaguesBlock =
-    buildWorkWithBlock(
-      "colleagues",
-      S(text.adapt_with_colleagues || workWith.colleagues || ""),
-      [
-        text.adapt_with_colleagues_q1,
-        text.adapt_with_colleagues_q2,
-        text.adapt_with_colleagues_q3,
-        text.adapt_with_colleagues_q4,
-      ]
-    );
-
-  const leadersBlock =
-    buildWorkWithBlock(
-      "leaders",
-      S(text.adapt_with_leaders || workWith.leaders || ""),
-      [
-        text.adapt_with_leaders_q1,
-        text.adapt_with_leaders_q2,
-        text.adapt_with_leaders_q3,
-        text.adapt_with_leaders_q4,
-      ]
-    );
 
   const chartUrl =
     S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
@@ -288,82 +206,63 @@ function normaliseInput(d = {}) {
   return {
     raw: d,
     identity: { fullName, dateLabel },
-    bands: bandsRaw,
-
-    exec_summary_para1: execA,
-    exec_summary_para2: execB,
-
-    ctrl_overview_para1: ovA,
-    ctrl_overview_para2: ovB,
-
-    ctrl_deepdive_para1: ddA,
-    ctrl_deepdive_para2: ddB,
-
-    themes_para1: thA,
-    themes_para2: thB,
-
-    // Coach workwith (page 5)
-    workWith: {
-      colleagues: colleaguesBlock,
-      leaders: leadersBlock,
-    },
-
+    exec_summary_para1: execBlock,
+    exec_summary_para2: "",
+    ctrl_overview_para1: ovBlock,
+    ctrl_overview_para2: "",
+    ctrl_deepdive_para1: ddBlock,
+    ctrl_deepdive_para2: "",
+    themes_para1: thBlock,
+    themes_para2: "",
+    workWith: { colleagues: colleaguesBlock, leaders: leadersBlock },
     chartUrl,
+    templateId: S(d.templateId || d.template_id || identity.templateId || "v1").trim(),
   };
 }
 
 /* ───────────── layout defaults (coach) ───────────── */
 const DEFAULT_LAYOUT = {
-  // page 2 exec summary
-  p2: {
-    exec1: { x: 60, y: 640, w: 960, size: 23, lineGap: 3, paraGap: 10, align: "left" },
-    exec2: { x: 60, y: 500, w: 960, size: 23, lineGap: 3, paraGap: 10, align: "left" }, // unused for coach; kept for compatibility
-  },
-
-  // page 3 ctrl overview + chart
+  p2: { exec1: { x: 60, y: 640, w: 960, size: 23, lineGap: 3, paraGap: 10, align: "left" } },
   p3: {
     ov1: { x: 60, y: 640, w: 950, size: 22, lineGap: 3, paraGap: 10, align: "left" },
-    ov2: { x: 60, y: 500, w: 950, size: 22, lineGap: 3, paraGap: 10, align: "left" }, // unused for coach
-    chart: { x: 980, y: 210, w: 720, h: 420 }, // fallback if template changes; actual image placement handled later
+    chart: { x: 980, y: 210, w: 720, h: 420 },
   },
-
-  // page 4 deepdive + themes
   p4: {
     dd1: { x: 60, y: 650, w: 950, size: 21, lineGap: 3, paraGap: 10, align: "left" },
-    dd2: { x: 60, y: 520, w: 950, size: 21, lineGap: 3, paraGap: 10, align: "left" }, // unused for coach
     th1: { x: 60, y: 360, w: 950, size: 21, lineGap: 3, paraGap: 10, align: "left" },
-    th2: { x: 60, y: 250, w: 950, size: 21, lineGap: 3, paraGap: 10, align: "left" }, // unused for coach
   },
-
-  // page 5 workwith blocks (coords you mentioned: collabC/collabT)
   p5: {
     collabC: { x: 60, y: 660, w: 920, size: 21, lineGap: 3, paraGap: 8, align: "left" },
     collabT: { x: 60, y: 320, w: 920, size: 21, lineGap: 3, paraGap: 8, align: "left" },
   },
-
-  // page 6 header only (fullName)
   p6: {
     headerName: { x: 70, y: 1020, size: 30, align: "left" },
-    headerDate: { x: 70, y: 980, size: 18, align: "left" }, // date can remain if you want later; you said only name for now
   },
 };
 
-/* ───────────── template loader ───────────── */
-async function loadTemplateBytes() {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
+/* ───────────── template loader (FIXED) ───────────── */
+/**
+ * Templates are stored at:
+ *   ctrl-coach-pdf-service/public/CTRL_PoC_Coach_Assessment_Profile_template_<id>.pdf
+ *
+ * On Vercel/Node, safest base is process.cwd() (project root).
+ */
+async function loadTemplateBytes(templateId) {
+  const id = (S(templateId || "").trim() || "v1").replace(/[^\w-]/g, "");
+  const filename = `CTRL_PoC_Coach_Assessment_Profile_template_${id}.pdf`;
 
-  // NOTE: adjust to your template filename if needed
-  const templatePath =
-    process.env.COACH_TEMPLATE_PATH ||
-    path.join(__dirname, "templates", "CTRL_Coach_Template.pdf");
+  // project root -> /public/<filename>
+  const templatePath = path.join(process.cwd(), "public", filename);
 
-  return fs.readFile(templatePath);
+  // Optional: allow override via env if you ever need it
+  const overridePath = S(process.env.COACH_TEMPLATE_PATH || "").trim();
+  const finalPath = overridePath || templatePath;
+
+  return fs.readFile(finalPath);
 }
 
 /* ───────────── optional chart fetch ───────────── */
 async function fetchImageBytes(url) {
-  // Node 18+ has fetch in runtime. Keep it safe.
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
@@ -377,7 +276,6 @@ async function fetchImageBytes(url) {
 /* ───────────── main handler ───────────── */
 export default async function handler(req, res) {
   try {
-    // Data can be passed in as ?data=<base64json> OR JSON body
     const { data: dataB64 } = req.query || {};
     const body = okObj(req.body) ? req.body : {};
     const parsed = dataB64 ? decodeBase64Json(dataB64) : null;
@@ -386,22 +284,25 @@ export default async function handler(req, res) {
     const D = normaliseInput(payload || {});
     const L = DEFAULT_LAYOUT;
 
-    const bytes = await loadTemplateBytes();
+    const bytes = await loadTemplateBytes(D.templateId);
     const pdfDoc = await PDFDocument.load(bytes);
 
-    // fonts
     const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     const pages = pdfDoc.getPages();
-    // Expecting 6 pages
+    // Coach template should be 6 pages. If not, fail loudly (better than silent weirdness).
+    if (pages.length < 6) {
+      throw new Error(`Template has ${pages.length} pages. Expected at least 6.`);
+    }
+
     const p2 = pages[1];
     const p3 = pages[2];
     const p4 = pages[3];
     const p5 = pages[4];
     const p6 = pages[5];
 
-    // ── page 2: exec summary
+    // Page 2: exec summary
     drawMultiBlockTwoParas(
       p2,
       D.exec_summary_para1,
@@ -414,7 +315,7 @@ export default async function handler(req, res) {
       { lineGap: L.p2.exec1.lineGap, paraGap: L.p2.exec1.paraGap, align: L.p2.exec1.align }
     );
 
-    // ── page 3: overview text
+    // Page 3: overview
     drawMultiBlockTwoParas(
       p3,
       D.ctrl_overview_para1,
@@ -427,22 +328,18 @@ export default async function handler(req, res) {
       { lineGap: L.p3.ov1.lineGap, paraGap: L.p3.ov1.paraGap, align: L.p3.ov1.align }
     );
 
-    // ── page 3: chart (if url provided)
+    // Page 3: chart
     if (D.chartUrl) {
       const imgBytes = await fetchImageBytes(D.chartUrl);
       if (imgBytes) {
-        let embedded;
-        // crude type check
         const isPng = imgBytes.slice(0, 8).toString("hex") === "89504e470d0a1a0a";
-        if (isPng) embedded = await pdfDoc.embedPng(imgBytes);
-        else embedded = await pdfDoc.embedJpg(imgBytes);
-
+        const embedded = isPng ? await pdfDoc.embedPng(imgBytes) : await pdfDoc.embedJpg(imgBytes);
         const { x, y, w, h } = L.p3.chart;
         p3.drawImage(embedded, { x, y, width: w, height: h });
       }
     }
 
-    // ── page 4: deepdive + themes
+    // Page 4: deepdive + themes
     drawMultiBlockTwoParas(
       p4,
       D.ctrl_deepdive_para1,
@@ -467,7 +364,7 @@ export default async function handler(req, res) {
       { lineGap: L.p4.th1.lineGap, paraGap: L.p4.th1.paraGap, align: L.p4.th1.align }
     );
 
-    // ── page 5: work with colleagues + leaders
+    // Page 5: work with colleagues + leaders (now includes questions)
     drawTextBlock(
       p5,
       D.workWith?.colleagues || "",
@@ -490,7 +387,7 @@ export default async function handler(req, res) {
       { lineGap: L.p5.collabT.lineGap, align: L.p5.collabT.align }
     );
 
-    // ── page 6: header name only (as per coach requirement)
+    // Page 6: header name only
     const name = S(D.identity?.fullName || "").trim();
     if (name) {
       p6.drawText(name, {
@@ -502,7 +399,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Export
     const out = await pdfDoc.save();
     res.setHeader("Content-Type", "application/pdf");
     res.status(200).send(Buffer.from(out));
