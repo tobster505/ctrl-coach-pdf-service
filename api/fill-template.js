@@ -1,12 +1,11 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V2 · 6 pages)
+ * CTRL Coach Export Service · fill-template (COACH V3 · based on USER V12.3)
  *
- * STRICT RULES (as requested):
- * - NO defaults
- * - NO fallbacks
- * - Template location is EXACT:
- *     <projectRoot>/ctrl-coach-pdf-service/public/CTRL_PoC_Coach_Assessment_Profile_template_<TEMPLATEKEY>.pdf
- * - TEMPLATEKEY must be provided at: payload.ctrl.templateKey (e.g. "RT")
+ * Coach-only changes vs USER V12.3:
+ * - Template prefix uses: CTRL_PoC_Coach_Assessment_Profile_template_<combo>.pdf
+ * - Co-ordinates are coach layout (6 pages)
+ * - Content uses coach blocks (paragraph + reflection questions)
+ * - Host/domain is irrelevant INSIDE this code (it matters where you deploy/call it)
  */
 
 export const config = { runtime: "nodejs" };
@@ -17,10 +16,11 @@ import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
 /* ───────────── small utils ───────────── */
-const S = (v) => (v == null ? "" : String(v));
+const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
+const okArr = (a) => Array.isArray(a);
 
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
@@ -101,6 +101,7 @@ function drawTextBox(page, font, text, box, opts = {}) {
   if (!t0.trim()) return;
 
   const pageH = page.getHeight();
+
   const size = N(opts.size ?? box.size ?? 12);
   const lineGap = N(opts.lineGap ?? box.lineGap ?? 2);
   const maxLines = N(opts.maxLines ?? box.maxLines ?? 999);
@@ -112,37 +113,121 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
-  // Convert template-top-left to pdf-lib bottom-left
-  const yTop = N(box.y);
-  const y = pageH - yTop - h;
+  // Auto-expand height so maxLines can actually render (kept from USER V12.3)
+  const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
+  if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
+    const lineHeight = size + lineGap;
+    const hNeeded = (pad * 2) + size + (Math.max(0, maxLines - 1) * lineHeight);
+    h = Math.max(h, hNeeded);
+  }
 
-  x += pad; w = Math.max(0, w - pad * 2);
-  const yInnerTop = y + h - pad;
+  const y = pageH - N(box.y) - h;
 
-  const lines = wrapText(font, t0, size, w);
-  const toDraw = lines.slice(0, maxLines);
+  const innerW = Math.max(0, w - pad * 2);
+  const lines = wrapText(font, t0.replace(/\r/g, ""), size, innerW).slice(0, maxLines);
 
-  let cursorY = yInnerTop - size;
-  for (const line of toDraw) {
-    if (cursorY < y + pad) break;
+  const lineHeight = size + lineGap;
+  let cursorY = y + h - pad - size;
 
-    let drawX = x;
-    if (align === "center") {
-      const tw = font.widthOfTextAtSize(line, size);
-      drawX = x + (w - tw) / 2;
-    } else if (align === "right") {
-      const tw = font.widthOfTextAtSize(line, size);
-      drawX = x + (w - tw);
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    let dx = x + pad;
+    if (align !== "left") {
+      const lw = font.widthOfTextAtSize(ln, size);
+      if (align === "center") dx = x + (w - lw) / 2;
+      if (align === "right") dx = x + w - pad - lw;
     }
-
-    page.drawText(line, { x: drawX, y: cursorY, size, font });
-    cursorY -= (size + lineGap);
+    page.drawText(ln, { x: dx, y: cursorY, size, font });
+    cursorY -= lineHeight;
   }
 }
 
-/* ───────── chart helpers ───────── */
+/* ───────── template loader (SAME PATTERN AS USER V12.3) ───────── */
+async function loadTemplateBytesLocal(fname) {
+  if (!fname.endsWith(".pdf")) throw new Error(`Invalid template filename: ${fname}`);
+
+  const __file = fileURLToPath(import.meta.url);
+  const __dir = path.dirname(__file);
+
+  const candidates = [
+    path.join(process.cwd(), "public", fname),
+    path.join(__dir, "..", "public", fname),
+    path.join(__dir, "public", fname),
+    path.join(__dir, fname),
+  ];
+
+  let lastErr;
+  for (const pth of candidates) {
+    try { return await fs.readFile(pth); }
+    catch (err) { lastErr = err; }
+  }
+
+  throw new Error(
+    `Template not found: ${fname}. Tried: ${candidates.join(" | ")}. Last: ${lastErr?.message || "no detail"}`
+  );
+}
+
+/* ───────── payload parsing ───────── */
+async function readPayload(req) {
+  if (req.method === "POST") {
+    const chunks = [];
+    for await (const ch of req) chunks.push(ch);
+    const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+
+  const url = new URL(req.url, "http://localhost");
+  const dataB64 = url.searchParams.get("data") || "";
+  if (!dataB64) return {};
+
+  try {
+    const raw = Buffer.from(dataB64, "base64").toString("utf8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+/* ───────── dom/second detection (copied from USER V12.3) ───────── */
+function resolveStateKey(any) {
+  const s = S(any).trim().toUpperCase();
+  const c = s.charAt(0);
+  if (["C", "T", "R", "L"].includes(c)) return c;
+
+  const low = S(any).toLowerCase();
+  if (low.includes("concealed")) return "C";
+  if (low.includes("triggered")) return "T";
+  if (low.includes("regulated")) return "R";
+  if (low.includes("lead")) return "L";
+  return null;
+}
+
+function computeDomAndSecondKeys(P) {
+  const raw = P.raw || {};
+  const ctrl = raw.ctrl || {};
+  const summary = (ctrl.summary || raw.ctrl?.summary || {}) || {};
+
+  const domKey =
+    resolveStateKey(P.domKey) ||
+    resolveStateKey(raw.dominantKey) ||
+    resolveStateKey(summary.dominant) ||
+    resolveStateKey(summary.domState) ||
+    resolveStateKey(raw.ctrl?.dominant) ||
+    resolveStateKey(raw.domState) ||
+    "R";
+
+  const secondKey =
+    resolveStateKey(P.secondKey) ||
+    resolveStateKey(raw.secondKey) ||
+    resolveStateKey(summary.secondState) ||
+    resolveStateKey(raw.secondState) ||
+    (domKey === "R" ? "T" : "R");
+
+  return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
+}
+
+/* ───────── chart embed (same as USER V12.3) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
-  // expects keys like: C_low, C_mid, C_high, T_low... etc.
   const keys = [
     "C_low","C_mid","C_high",
     "T_low","T_mid","T_high",
@@ -215,6 +300,7 @@ function makeSpiderChartUrl12(bandsRaw) {
 
 async function embedRemoteImage(pdfDoc, url) {
   if (!url) return null;
+
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch chart: ${res.status} ${res.statusText}`);
 
@@ -251,7 +337,27 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT (COACH · 6 pages) ───────── */
+/* ───────── coach block builders (para + numbered questions) ───────── */
+function buildCoachSectionBlock(paragraph, questions) {
+  const p = S(paragraph).trim();
+  const qs = (Array.isArray(questions) ? questions : [])
+    .map((q) => S(q).trim())
+    .filter(Boolean);
+
+  if (!p && !qs.length) return "";
+
+  const lines = [];
+  if (p) lines.push(p);
+
+  if (qs.length) {
+    lines.push("Reflection questions:");
+    qs.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
+  }
+
+  return lines.join("\n");
+}
+
+/* ───────── DEFAULT COACH LAYOUT (6 pages) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
@@ -259,7 +365,7 @@ const DEFAULT_LAYOUT = {
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    // Only page 6 needs header fullName
+    // Only page 6 needs header fullName (coach template)
     p6: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
     // Page 2 content (exec) uses p3Text boxes
@@ -283,7 +389,7 @@ const DEFAULT_LAYOUT = {
       th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
     },
 
-    // Page 5 workwith blocks
+    // Page 5 workwith blocks (coach = colleagues + leaders)
     p6WorkWith: {
       collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
       collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
@@ -291,7 +397,7 @@ const DEFAULT_LAYOUT = {
   },
 };
 
-/* ───────── URL layout overrides (unchanged) ───────── */
+/* ───────── URL layout overrides (same as USER V12.3) ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
   const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
   const applied = [];
@@ -330,128 +436,63 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
   return { applied, ignored, layoutPages };
 }
 
-/* ───────── STRICT template loader (NO defaults, NO fallbacks) ───────── */
-async function loadTemplateBytesExact(templateKey) {
-  const key = S(templateKey).trim();
-  if (!key) throw new Error("payload.ctrl.templateKey is REQUIRED (e.g. 'RT'). No defaults are allowed.");
-  if (!/^[A-Za-z0-9_-]+$/.test(key)) {
-    throw new Error(`payload.ctrl.templateKey '${key}' is invalid. Use only letters, numbers, '_' or '-'.`);
-  }
-
-  const fname = `CTRL_PoC_Coach_Assessment_Profile_template_${key}.pdf`;
-
-  // EXACT location (as requested)
-  const absolutePath = path.join(
-    process.cwd(),
-    "ctrl-coach-pdf-service",
-    "public",
-    fname
-  );
-
-  try {
-    const bytes = await fs.readFile(absolutePath);
-    return { bytes, fname, absolutePath };
-  } catch {
-    throw new Error(`Template not found at EXACT path: ${absolutePath}`);
-  }
-}
-
-/* ───────── payload parsing (kept flexible: POST JSON or ?data=base64json) ───────── */
-async function readPayload(req) {
-  if (req.method === "POST") {
-    const chunks = [];
-    for await (const ch of req) chunks.push(ch);
-    const raw = Buffer.concat(chunks).toString("utf8") || "{}";
-    try { return JSON.parse(raw); } catch { return {}; }
-  }
-
-  const url = new URL(req.url, "http://localhost");
-  const dataB64 = url.searchParams.get("data") || "";
-  if (!dataB64) return {};
-
-  try {
-    const raw = Buffer.from(dataB64, "base64").toString("utf8");
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-/* ───────── Coach block builders (para + numbered questions) ───────── */
-function buildCoachSectionBlock(paragraph, questions) {
-  const p = S(paragraph).trim();
-  const qs = (Array.isArray(questions) ? questions : [])
-    .map((q) => S(q).trim())
-    .filter(Boolean);
-
-  if (!p && !qs.length) return "";
-
-  const lines = [];
-  if (p) lines.push(p);
-
-  if (qs.length) {
-    lines.push("Reflection questions:");
-    qs.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
-  }
-
-  return lines.join("\n");
-}
-
+/* ───────── input normaliser (coach) ───────── */
 function normaliseInput(d = {}) {
-  // NOTE: we are NOT defaulting/falling back for template selection.
-  // templateKey must be exactly at d.ctrl.templateKey.
-  const ctrl = okObj(d.ctrl) ? d.ctrl : {};
-  const templateKey = ctrl.templateKey;
-
-  // identity/text can still be absent; templateKey cannot.
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
+  const ctrl = okObj(d.ctrl) ? d.ctrl : {};
   const summary = okObj(ctrl.summary) ? ctrl.summary : {};
 
-  const fullName = S(identity.fullName || summary?.identity?.fullName).trim();
-  const dateLabel = S(identity.dateLabel || summary?.dateLbl).trim();
+  const fullName = S(identity.fullName || d.fullName || d.FullName || summary?.identity?.fullName || "").trim();
+  const dateLabel = S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
 
-  const bandsRaw = okObj(summary.ctrl12) ? summary.ctrl12 : {};
+  const bandsRaw =
+    (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
+    (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
+    (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
+    {};
 
-  // Build: paragraph + questions, keep everything in para1, leave para2 blank.
-  const execBlock = buildCoachSectionBlock(text.exec_summary, [
+  // Coach sections: paragraph + questions → keep everything in para1
+  const execBlock = buildCoachSectionBlock(text.exec_summary || "", [
     text.exec_summary_q1, text.exec_summary_q2, text.exec_summary_q3,
     text.exec_summary_q4, text.exec_summary_q5, text.exec_summary_q6,
   ]);
 
-  const ovBlock = buildCoachSectionBlock(text.ctrl_overview, [
+  const ovBlock = buildCoachSectionBlock(text.ctrl_overview || "", [
     text.ctrl_overview_q1, text.ctrl_overview_q2, text.ctrl_overview_q3,
     text.ctrl_overview_q4, text.ctrl_overview_q5,
   ]);
 
-  const ddBlock = buildCoachSectionBlock(text.ctrl_deepdive, [
+  const ddBlock = buildCoachSectionBlock(text.ctrl_deepdive || "", [
     text.ctrl_deepdive_q1, text.ctrl_deepdive_q2, text.ctrl_deepdive_q3,
     text.ctrl_deepdive_q4, text.ctrl_deepdive_q5, text.ctrl_deepdive_q6,
   ]);
 
-  const thBlock = buildCoachSectionBlock(text.themes, [
+  const thBlock = buildCoachSectionBlock(text.themes || "", [
     text.themes_q1, text.themes_q2, text.themes_q3, text.themes_q4, text.themes_q5,
   ]);
 
-  const colleaguesBlock = buildCoachSectionBlock(text.adapt_with_colleagues, [
+  const colleaguesBlock = buildCoachSectionBlock(text.adapt_with_colleagues || "", [
     text.adapt_with_colleagues_q1,
     text.adapt_with_colleagues_q2,
     text.adapt_with_colleagues_q3,
     text.adapt_with_colleagues_q4,
   ]);
 
-  const leadersBlock = buildCoachSectionBlock(text.adapt_with_leaders, [
+  const leadersBlock = buildCoachSectionBlock(text.adapt_with_leaders || "", [
     text.adapt_with_leaders_q1,
     text.adapt_with_leaders_q2,
     text.adapt_with_leaders_q3,
     text.adapt_with_leaders_q4,
   ]);
 
-  const chartUrl = S(text.chartUrl).trim();
+  const chartUrl =
+    S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
+    S(d.chart?.spiderUrl || d.chart?.url || "").trim() ||
+    S(summary?.chart?.spiderUrl || "").trim();
 
   return {
     raw: d,
-    ctrl: { templateKey },
     identity: { fullName, dateLabel },
     bands: bandsRaw,
 
@@ -468,26 +509,24 @@ function normaliseInput(d = {}) {
     themes_para2: "",
 
     workWith: { colleagues: colleaguesBlock, leaders: leadersBlock },
+
     chartUrl,
   };
 }
 
 /* ───────── debug probe ───────── */
-function buildProbe(P, tpl, ov, L) {
+function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
-    where: "fill-template:COACH_V2:debug",
-    template: safeJson(tpl),
+    where: "fill-template:COACH_V3:debug",
+    template: tpl,
+    domSecond: safeJson(domSecond),
     identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
     textLengths: {
       exec1: S(P.exec_summary_para1).length,
-      exec2: S(P.exec_summary_para2).length,
       ov1: S(P.ctrl_overview_para1).length,
-      ov2: S(P.ctrl_overview_para2).length,
       dd1: S(P.ctrl_deepdive_para1).length,
-      dd2: S(P.ctrl_deepdive_para2).length,
       th1: S(P.themes_para1).length,
-      th2: S(P.themes_para2).length,
       workwith_colleagues: S(P.workWith?.colleagues).length,
       workwith_leaders: S(P.workWith?.leaders).length,
     },
@@ -496,11 +535,6 @@ function buildProbe(P, tpl, ov, L) {
       ignoredCount: ov?.ignored?.length || 0,
       applied: ov?.applied || [],
       ignored: ov?.ignored || [],
-      resolvedExamples: {
-        p6WorkWith_collabC: safeJson(L?.p6WorkWith?.collabC || {}),
-        p6WorkWith_collabT: safeJson(L?.p6WorkWith?.collabT || {}),
-        p6_hdrName: safeJson(L?.p6?.hdrName || {}),
-      },
     },
   };
 }
@@ -514,17 +548,29 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
-    // STRICT: must exist
-    const { bytes: pdfBytes, fname, absolutePath } = await loadTemplateBytesExact(P.ctrl.templateKey);
+    // Compute dom/second in the same way as USER V12.3
+    const domSecond = computeDomAndSecondKeys({
+      raw: payload,
+      domKey: payload?.dominantKey,
+      secondKey: payload?.secondKey
+    });
+
+    // Template selection (same pattern as USER; just coach filename prefix)
+    const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
+    const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
+
+    const tpl = {
+      combo: domSecond.templateKey,
+      safeCombo,
+      tpl: `CTRL_PoC_Coach_Assessment_Profile_template_${safeCombo}.pdf`,
+    };
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
     const ov = applyLayoutOverridesFromUrl(L, url);
 
-    if (debug) {
-      const tpl = { filename: fname, absolutePath };
-      return res.status(200).json(buildProbe(P, tpl, ov, L));
-    }
+    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
 
+    const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
 
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -532,13 +578,13 @@ export default async function handler(req, res) {
 
     const pages = pdfDoc.getPages();
 
-    // total pages = 6
+    // Coach template expected: 6 pages
     const p1 = pages[0] || null;
-    const p2 = pages[1] || null; // exec_summary
+    const p2 = pages[1] || null; // exec
     const p3 = pages[2] || null; // overview + chart
     const p4 = pages[3] || null; // deepdive + themes
     const p5 = pages[4] || null; // workwith
-    const p6 = pages[5] || null; // legal (header name only)
+    const p6 = pages[5] || null; // legal / footer page with header name
 
     // Page 1: name + date
     if (p1) {
@@ -546,13 +592,13 @@ export default async function handler(req, res) {
       drawTextBox(p1, font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
     }
 
-    // Page 6 header name ONLY
+    // Page 6: header name (coach)
     const headerName = norm(P.identity.fullName);
     if (headerName && p6 && L?.p6?.hdrName) {
       drawTextBox(p6, font, headerName, L.p6.hdrName, { maxLines: 1 });
     }
 
-    // Page 2: Exec summary (para + questions in para1; para2 blank)
+    // Page 2: Exec
     if (p2) {
       drawTextBox(p2, font, P.exec_summary_para1, L.p3Text.exec1);
       drawTextBox(p2, font, P.exec_summary_para2, L.p3Text.exec2);
@@ -562,11 +608,10 @@ export default async function handler(req, res) {
     if (p3) {
       drawTextBox(p3, font, P.ctrl_overview_para1, L.p4Text.ov1);
       drawTextBox(p3, font, P.ctrl_overview_para2, L.p4Text.ov2);
-
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p3, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:COACH_V2] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:COACH_V3] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -578,7 +623,7 @@ export default async function handler(req, res) {
       drawTextBox(p4, font, P.themes_para2, L.p5Text.th2);
     }
 
-    // Page 5: Workwith colleagues + leaders (para + numbered questions)
+    // Page 5: Work-with (colleagues + leaders)
     if (p5) {
       drawTextBox(p5, font, P.workWith?.colleagues, L.p6WorkWith.collabC);
       drawTextBox(p5, font, P.workWith?.leaders,    L.p6WorkWith.collabT);
@@ -592,7 +637,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:COACH_V2] CRASH", err);
+    console.error("[fill-template:COACH_V3] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
