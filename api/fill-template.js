@@ -1,11 +1,8 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V3 · based on USER V12.3)
+ * CTRL Coach Export Service · fill-template (COACH V3.2)
  *
- * Coach-only changes vs USER V12.3:
- * - Template prefix uses: CTRL_PoC_Coach_Assessment_Profile_template_<combo>.pdf
- * - Co-ordinates are coach layout (6 pages)
- * - Content uses coach blocks (paragraph + reflection questions)
- * - Host/domain is irrelevant INSIDE this code (it matters where you deploy/call it)
+ * Change in V3.2:
+ * - Header FullName is drawn on p2, p3, p4, p5, p6 (not only p6)
  */
 
 export const config = { runtime: "nodejs" };
@@ -16,11 +13,10 @@ import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
 /* ───────────── small utils ───────────── */
-const S = (v, fb = "") => (v == null ? String(fb) : String(v));
+const S = (v) => (v == null ? "" : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
-const okArr = (a) => Array.isArray(a);
 
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
@@ -113,7 +109,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
-  // Auto-expand height so maxLines can actually render (kept from USER V12.3)
   const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
   if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
     const lineHeight = size + lineGap;
@@ -138,7 +133,7 @@ function drawTextBox(page, font, text, box, opts = {}) {
       if (align === "right") dx = x + w - pad - lw;
     }
     page.drawText(ln, { x: dx, y: cursorY, size, font });
-    cursorY -= lineHeight;
+    cursorY -= (size + lineGap);
   }
 }
 
@@ -188,7 +183,7 @@ async function readPayload(req) {
   }
 }
 
-/* ───────── dom/second detection (copied from USER V12.3) ───────── */
+/* ───────── dom/second detection (STRICT) ───────── */
 function resolveStateKey(any) {
   const s = S(any).trim().toUpperCase();
   const c = s.charAt(0);
@@ -202,7 +197,7 @@ function resolveStateKey(any) {
   return null;
 }
 
-function computeDomAndSecondKeys(P) {
+function computeDomAndSecondKeysStrict(P) {
   const raw = P.raw || {};
   const ctrl = raw.ctrl || {};
   const summary = (ctrl.summary || raw.ctrl?.summary || {}) || {};
@@ -213,15 +208,16 @@ function computeDomAndSecondKeys(P) {
     resolveStateKey(summary.dominant) ||
     resolveStateKey(summary.domState) ||
     resolveStateKey(raw.ctrl?.dominant) ||
-    resolveStateKey(raw.domState) ||
-    "R";
+    resolveStateKey(raw.domState);
 
   const secondKey =
     resolveStateKey(P.secondKey) ||
     resolveStateKey(raw.secondKey) ||
     resolveStateKey(summary.secondState) ||
-    resolveStateKey(raw.secondState) ||
-    (domKey === "R" ? "T" : "R");
+    resolveStateKey(raw.secondState);
+
+  if (!domKey) throw new Error("Missing domKey: could not resolve dominant state key from payload.");
+  if (!secondKey) throw new Error("Missing secondKey: could not resolve second state key from payload.");
 
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
@@ -234,14 +230,12 @@ function makeSpiderChartUrl12(bandsRaw) {
     "R_low","R_mid","R_high",
     "L_low","L_mid","L_high",
   ];
-
   const displayLabels = [
     "","Concealed","",
     "","Triggered","",
     "","Regulated","",
     "","Lead",""
   ];
-
   const vals = keys.map((k) => Number(bandsRaw?.[k] || 0));
   const maxVal = Math.max(...vals, 1);
   const data = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
@@ -252,13 +246,11 @@ function makeSpiderChartUrl12(bandsRaw) {
     R: { low: "rgba(226, 236, 230, 0.55)", mid: "rgba(143, 183, 161, 0.55)", high: "rgba( 79, 127, 105, 0.55)" },
     L: { low: "rgba(230, 220, 227, 0.55)", mid: "rgba(164, 135, 159, 0.55)", high: "rgba( 94,  63,  90, 0.55)" },
   };
-
   const colours = keys.map((k) => {
     const state = k[0];
     const tier = k.split("_")[1];
     return CTRL_COLOURS[state]?.[tier] || "rgba(0,0,0,0.10)";
   });
-
   const startAngle = -Math.PI / 4;
 
   const cfg = {
@@ -337,26 +329,6 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── coach block builders (para + numbered questions) ───────── */
-function buildCoachSectionBlock(paragraph, questions) {
-  const p = S(paragraph).trim();
-  const qs = (Array.isArray(questions) ? questions : [])
-    .map((q) => S(q).trim())
-    .filter(Boolean);
-
-  if (!p && !qs.length) return "";
-
-  const lines = [];
-  if (p) lines.push(p);
-
-  if (qs.length) {
-    lines.push("Reflection questions:");
-    qs.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
-  }
-
-  return lines.join("\n");
-}
-
 /* ───────── DEFAULT COACH LAYOUT (6 pages) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
@@ -365,39 +337,45 @@ const DEFAULT_LAYOUT = {
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    // Only page 6 needs header fullName (coach template)
+    // Header name needs to be on p2–p6
+    p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p5: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p6: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Page 2 content (exec) uses p3Text boxes
+    // Page 2 (exec): text + questions
     p3Text: {
-      exec1: { x: 25, y: 380, w: 550, h: 250, size: 16, align: "left", maxLines: 13 },
-      exec2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 22 },
+      exec1: { x: 25, y: 380, w: 550, h: 180, size: 16, align: "left", maxLines: 9 },
+      exec2: { x: 25, y: 560, w: 550, h: 450, size: 16, align: "left", maxLines: 40 },
     },
 
-    // Page 3 content (overview + chart) uses p4Text boxes
+    // Page 3 (overview + chart): text + questions
     p4Text: {
-      ov1: { x: 25, y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 30 },
-      ov2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 23 },
+      ov1:   { x: 25, y: 160, w: 200, h: 210, size: 16, align: "left", maxLines: 14 },
+      ov2:   { x: 25, y: 520, w: 550, h: 490, size: 16, align: "left", maxLines: 42 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
-    // Page 4 content (deepdive + themes) uses p5Text boxes
+    // Page 4 (deepdive + themes): each split
     p5Text: {
-      dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
-      dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
-      th1: { x: 25, y: 540, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
-      th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
+      dd1: { x: 25, y: 140, w: 550, h: 170, size: 16, align: "left", maxLines: 10 },
+      dd2: { x: 25, y: 310, w: 550, h: 260, size: 16, align: "left", maxLines: 28 },
+      th1: { x: 25, y: 540, w: 550, h: 120, size: 16, align: "left", maxLines: 8 },
+      th2: { x: 25, y: 660, w: 550, h: 190, size: 16, align: "left", maxLines: 22 },
     },
 
-    // Page 5 workwith blocks (coach = colleagues + leaders)
+    // Page 5 work-with: split each column into text + questions
     p6WorkWith: {
-      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
-      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabC_text: { x: 30,  y: 300, w: 270, h: 110, size: 14, align: "left", maxLines: 7 },
+      collabC_q:    { x: 30,  y: 410, w: 270, h: 310, size: 14, align: "left", maxLines: 24 },
+      collabT_text: { x: 320, y: 300, w: 260, h: 110, size: 14, align: "left", maxLines: 7 },
+      collabT_q:    { x: 320, y: 410, w: 260, h: 310, size: 14, align: "left", maxLines: 24 },
     },
   },
 };
 
-/* ───────── URL layout overrides (same as USER V12.3) ───────── */
+/* ───────── URL layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
   const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
   const applied = [];
@@ -436,7 +414,7 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
   return { applied, ignored, layoutPages };
 }
 
-/* ───────── input normaliser (coach) ───────── */
+/* ───────── input normaliser (coach v2 text + questions) ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
@@ -452,40 +430,6 @@ function normaliseInput(d = {}) {
     (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
     {};
 
-  // Coach sections: paragraph + questions → keep everything in para1
-  const execBlock = buildCoachSectionBlock(text.exec_summary || "", [
-    text.exec_summary_q1, text.exec_summary_q2, text.exec_summary_q3,
-    text.exec_summary_q4, text.exec_summary_q5, text.exec_summary_q6,
-  ]);
-
-  const ovBlock = buildCoachSectionBlock(text.ctrl_overview || "", [
-    text.ctrl_overview_q1, text.ctrl_overview_q2, text.ctrl_overview_q3,
-    text.ctrl_overview_q4, text.ctrl_overview_q5,
-  ]);
-
-  const ddBlock = buildCoachSectionBlock(text.ctrl_deepdive || "", [
-    text.ctrl_deepdive_q1, text.ctrl_deepdive_q2, text.ctrl_deepdive_q3,
-    text.ctrl_deepdive_q4, text.ctrl_deepdive_q5, text.ctrl_deepdive_q6,
-  ]);
-
-  const thBlock = buildCoachSectionBlock(text.themes || "", [
-    text.themes_q1, text.themes_q2, text.themes_q3, text.themes_q4, text.themes_q5,
-  ]);
-
-  const colleaguesBlock = buildCoachSectionBlock(text.adapt_with_colleagues || "", [
-    text.adapt_with_colleagues_q1,
-    text.adapt_with_colleagues_q2,
-    text.adapt_with_colleagues_q3,
-    text.adapt_with_colleagues_q4,
-  ]);
-
-  const leadersBlock = buildCoachSectionBlock(text.adapt_with_leaders || "", [
-    text.adapt_with_leaders_q1,
-    text.adapt_with_leaders_q2,
-    text.adapt_with_leaders_q3,
-    text.adapt_with_leaders_q4,
-  ]);
-
   const chartUrl =
     S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
     S(d.chart?.spiderUrl || d.chart?.url || "").trim() ||
@@ -496,19 +440,23 @@ function normaliseInput(d = {}) {
     identity: { fullName, dateLabel },
     bands: bandsRaw,
 
-    exec_summary_para1: execBlock,
-    exec_summary_para2: "",
+    exec_summary_text: S(text.exec_summary_text).trim(),
+    exec_summary_questions: S(text.exec_summary_questions).trim(),
 
-    ctrl_overview_para1: ovBlock,
-    ctrl_overview_para2: "",
+    ctrl_overview_text: S(text.ctrl_overview_text).trim(),
+    ctrl_overview_questions: S(text.ctrl_overview_questions).trim(),
 
-    ctrl_deepdive_para1: ddBlock,
-    ctrl_deepdive_para2: "",
+    ctrl_deepdive_text: S(text.ctrl_deepdive_text).trim(),
+    ctrl_deepdive_questions: S(text.ctrl_deepdive_questions).trim(),
 
-    themes_para1: thBlock,
-    themes_para2: "",
+    themes_text: S(text.themes_text).trim(),
+    themes_questions: S(text.themes_questions).trim(),
 
-    workWith: { colleagues: colleaguesBlock, leaders: leadersBlock },
+    adapt_with_colleagues_text: S(text.adapt_with_colleagues_text).trim(),
+    adapt_with_colleagues_questions: S(text.adapt_with_colleagues_questions).trim(),
+
+    adapt_with_leaders_text: S(text.adapt_with_leaders_text).trim(),
+    adapt_with_leaders_questions: S(text.adapt_with_leaders_questions).trim(),
 
     chartUrl,
   };
@@ -518,17 +466,30 @@ function normaliseInput(d = {}) {
 function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
-    where: "fill-template:COACH_V3:debug",
+    where: "fill-template:COACH_V3.2:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
     identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
+    headerBoxes: {
+      p2: safeJson(L?.p2?.hdrName || null),
+      p3: safeJson(L?.p3?.hdrName || null),
+      p4: safeJson(L?.p4?.hdrName || null),
+      p5: safeJson(L?.p5?.hdrName || null),
+      p6: safeJson(L?.p6?.hdrName || null),
+    },
     textLengths: {
-      exec1: S(P.exec_summary_para1).length,
-      ov1: S(P.ctrl_overview_para1).length,
-      dd1: S(P.ctrl_deepdive_para1).length,
-      th1: S(P.themes_para1).length,
-      workwith_colleagues: S(P.workWith?.colleagues).length,
-      workwith_leaders: S(P.workWith?.leaders).length,
+      exec_text: S(P.exec_summary_text).length,
+      exec_q: S(P.exec_summary_questions).length,
+      ov_text: S(P.ctrl_overview_text).length,
+      ov_q: S(P.ctrl_overview_questions).length,
+      dd_text: S(P.ctrl_deepdive_text).length,
+      dd_q: S(P.ctrl_deepdive_questions).length,
+      th_text: S(P.themes_text).length,
+      th_q: S(P.themes_questions).length,
+      wwC_text: S(P.adapt_with_colleagues_text).length,
+      wwC_q: S(P.adapt_with_colleagues_questions).length,
+      wwL_text: S(P.adapt_with_leaders_text).length,
+      wwL_q: S(P.adapt_with_leaders_questions).length,
     },
     layoutOverrides: {
       appliedCount: ov?.applied?.length || 0,
@@ -548,21 +509,21 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
-    // Compute dom/second in the same way as USER V12.3
-    const domSecond = computeDomAndSecondKeys({
+    const domSecond = computeDomAndSecondKeysStrict({
       raw: payload,
       domKey: payload?.dominantKey,
       secondKey: payload?.secondKey
     });
 
-    // Template selection (same pattern as USER; just coach filename prefix)
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
-    const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
+    if (!validCombos.has(domSecond.templateKey)) {
+      throw new Error(`Invalid templateKey '${domSecond.templateKey}'. Expected one of: ${Array.from(validCombos).join(", ")}`);
+    }
 
     const tpl = {
       combo: domSecond.templateKey,
-      safeCombo,
-      tpl: `CTRL_PoC_Coach_Assessment_Profile_template_${safeCombo}.pdf`,
+      safeCombo: domSecond.templateKey,
+      tpl: `CTRL_PoC_Coach_Assessment_Profile_template_${domSecond.templateKey}.pdf`,
     };
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
@@ -584,7 +545,7 @@ export default async function handler(req, res) {
     const p3 = pages[2] || null; // overview + chart
     const p4 = pages[3] || null; // deepdive + themes
     const p5 = pages[4] || null; // workwith
-    const p6 = pages[5] || null; // legal / footer page with header name
+    const p6 = pages[5] || null; // legal / footer
 
     // Page 1: name + date
     if (p1) {
@@ -592,41 +553,49 @@ export default async function handler(req, res) {
       drawTextBox(p1, font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
     }
 
-    // Page 6: header name (coach)
+    // Header name on pages 2–6
     const headerName = norm(P.identity.fullName);
-    if (headerName && p6 && L?.p6?.hdrName) {
-      drawTextBox(p6, font, headerName, L.p6.hdrName, { maxLines: 1 });
+    if (headerName) {
+      if (p2 && L?.p2?.hdrName) drawTextBox(p2, font, headerName, L.p2.hdrName, { maxLines: 1 });
+      if (p3 && L?.p3?.hdrName) drawTextBox(p3, font, headerName, L.p3.hdrName, { maxLines: 1 });
+      if (p4 && L?.p4?.hdrName) drawTextBox(p4, font, headerName, L.p4.hdrName, { maxLines: 1 });
+      if (p5 && L?.p5?.hdrName) drawTextBox(p5, font, headerName, L.p5.hdrName, { maxLines: 1 });
+      if (p6 && L?.p6?.hdrName) drawTextBox(p6, font, headerName, L.p6.hdrName, { maxLines: 1 });
     }
 
     // Page 2: Exec
     if (p2) {
-      drawTextBox(p2, font, P.exec_summary_para1, L.p3Text.exec1);
-      drawTextBox(p2, font, P.exec_summary_para2, L.p3Text.exec2);
+      drawTextBox(p2, font, P.exec_summary_text,      L.p3Text.exec1);
+      drawTextBox(p2, font, P.exec_summary_questions, L.p3Text.exec2);
     }
 
     // Page 3: Overview + chart
     if (p3) {
-      drawTextBox(p3, font, P.ctrl_overview_para1, L.p4Text.ov1);
-      drawTextBox(p3, font, P.ctrl_overview_para2, L.p4Text.ov2);
+      drawTextBox(p3, font, P.ctrl_overview_text,      L.p4Text.ov1);
+      drawTextBox(p3, font, P.ctrl_overview_questions, L.p4Text.ov2);
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p3, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:COACH_V3] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:COACH_V3.2] Chart skipped:", e?.message || String(e));
       }
     }
 
     // Page 4: Deepdive + Themes
     if (p4) {
-      drawTextBox(p4, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
-      drawTextBox(p4, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
-      drawTextBox(p4, font, P.themes_para1, L.p5Text.th1);
-      drawTextBox(p4, font, P.themes_para2, L.p5Text.th2);
+      drawTextBox(p4, font, P.ctrl_deepdive_text,      L.p5Text.dd1);
+      drawTextBox(p4, font, P.ctrl_deepdive_questions, L.p5Text.dd2);
+
+      drawTextBox(p4, font, P.themes_text,      L.p5Text.th1);
+      drawTextBox(p4, font, P.themes_questions, L.p5Text.th2);
     }
 
-    // Page 5: Work-with (colleagues + leaders)
+    // Page 5: Work-with
     if (p5) {
-      drawTextBox(p5, font, P.workWith?.colleagues, L.p6WorkWith.collabC);
-      drawTextBox(p5, font, P.workWith?.leaders,    L.p6WorkWith.collabT);
+      drawTextBox(p5, font, P.adapt_with_colleagues_text,      L.p6WorkWith.collabC_text);
+      drawTextBox(p5, font, P.adapt_with_colleagues_questions, L.p6WorkWith.collabC_q);
+
+      drawTextBox(p5, font, P.adapt_with_leaders_text,      L.p6WorkWith.collabT_text);
+      drawTextBox(p5, font, P.adapt_with_leaders_questions, L.p6WorkWith.collabT_q);
     }
 
     const outBytes = await pdfDoc.save();
@@ -637,7 +606,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:COACH_V3] CRASH", err);
+    console.error("[fill-template:COACH_V3.2] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
