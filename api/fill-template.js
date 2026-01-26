@@ -370,7 +370,7 @@ const DEFAULT_LAYOUT = {
     // Page 2 (exec): text + questions
     p3Text: {
       exec1: { x: 25, y: 380, w: 550, h: 180, size: 16, align: "left", maxLines: 9 },
-      exec2: { x: 25, y: 560, w: 550, h: 450, size: 16, align: "left", maxLines: 40 },
+      exec2: { x: 25, y: 530, w: 550, h: 450, size: 16, align: "left", maxLines: 40 },
     },
 
     // Page 3 (overview + chart): text + questions
@@ -383,9 +383,9 @@ const DEFAULT_LAYOUT = {
     // Page 4 (deepdive + themes): each split
     p5Text: {
       dd1: { x: 25, y: 140, w: 550, h: 170, size: 16, align: "left", maxLines: 10 },
-      dd2: { x: 25, y: 310, w: 550, h: 260, size: 16, align: "left", maxLines: 28 },
+      dd2: { x: 25, y: 270, w: 550, h: 260, size: 16, align: "left", maxLines: 28 },
       th1: { x: 25, y: 540, w: 550, h: 120, size: 16, align: "left", maxLines: 8 },
-      th2: { x: 25, y: 660, w: 550, h: 190, size: 16, align: "left", maxLines: 22 },
+      th2: { x: 25, y: 650, w: 550, h: 190, size: 16, align: "left", maxLines: 22 },
     },
 
     // Page 5 work-with: split each column into text + questions
