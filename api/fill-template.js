@@ -1,8 +1,12 @@
 /**
- * CTRL Coach Export Service · fill-template (COACH V3.2)
+ * CTRL Coach Export Service · fill-template (COACH V4)
  *
- * Change in V3.2:
- * - Header FullName is drawn on p2, p3, p4, p5, p6 (not only p6)
+ * Changes in V4 (vs V3.2):
+ * - Questions are normalised into dash-bullets (each line starts with "- ")
+ * - Existing numbering/bullets are stripped, then re-written as dashes
+ * - Keeps the V3.2 behaviour: header FullName drawn on p2, p3, p4, p5, p6
+ *
+ * Base file: fill-template coach v3.2.txt :contentReference[oaicite:0]{index=0}
  */
 
 export const config = { runtime: "nodejs" };
@@ -21,6 +25,25 @@ const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
   catch { return { _error: "Could not serialise debug object" }; }
+}
+
+/* ───────── questions normaliser (dashes) ───────── */
+function asDashLines(input) {
+  const s0 = S(input).replace(/\r/g, "").trim();
+  if (!s0) return "";
+
+  // Split primarily by newlines (Gen should already do this)
+  const parts = s0
+    .split(/\n+/)
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  // Strip any existing numbering/bullets then re-prefix with "-"
+  const cleaned = parts
+    .map(line => line.replace(/^(\d+[\.\)]\s+|[-•]\s+)/, "").trim())
+    .filter(Boolean);
+
+  return cleaned.map(q => `- ${q}`).join("\n");
 }
 
 /* ───────── filename helpers ───────── */
@@ -121,9 +144,7 @@ function drawTextBox(page, font, text, box, opts = {}) {
   const innerW = Math.max(0, w - pad * 2);
   const lines = wrapText(font, t0.replace(/\r/g, ""), size, innerW).slice(0, maxLines);
 
-  const lineHeight = size + lineGap;
   let cursorY = y + h - pad - size;
-
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
     let dx = x + pad;
@@ -435,28 +456,29 @@ function normaliseInput(d = {}) {
     S(d.chart?.spiderUrl || d.chart?.url || "").trim() ||
     S(summary?.chart?.spiderUrl || "").trim();
 
+  // STRICT: keep text as-is; force questions to dash lines (no numbering)
   return {
     raw: d,
     identity: { fullName, dateLabel },
     bands: bandsRaw,
 
     exec_summary_text: S(text.exec_summary_text).trim(),
-    exec_summary_questions: S(text.exec_summary_questions).trim(),
+    exec_summary_questions: asDashLines(text.exec_summary_questions),
 
     ctrl_overview_text: S(text.ctrl_overview_text).trim(),
-    ctrl_overview_questions: S(text.ctrl_overview_questions).trim(),
+    ctrl_overview_questions: asDashLines(text.ctrl_overview_questions),
 
     ctrl_deepdive_text: S(text.ctrl_deepdive_text).trim(),
-    ctrl_deepdive_questions: S(text.ctrl_deepdive_questions).trim(),
+    ctrl_deepdive_questions: asDashLines(text.ctrl_deepdive_questions),
 
     themes_text: S(text.themes_text).trim(),
-    themes_questions: S(text.themes_questions).trim(),
+    themes_questions: asDashLines(text.themes_questions),
 
     adapt_with_colleagues_text: S(text.adapt_with_colleagues_text).trim(),
-    adapt_with_colleagues_questions: S(text.adapt_with_colleagues_questions).trim(),
+    adapt_with_colleagues_questions: asDashLines(text.adapt_with_colleagues_questions),
 
     adapt_with_leaders_text: S(text.adapt_with_leaders_text).trim(),
-    adapt_with_leaders_questions: S(text.adapt_with_leaders_questions).trim(),
+    adapt_with_leaders_questions: asDashLines(text.adapt_with_leaders_questions),
 
     chartUrl,
   };
@@ -466,7 +488,7 @@ function normaliseInput(d = {}) {
 function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
-    where: "fill-template:COACH_V3.2:debug",
+    where: "fill-template:COACH_V4:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
     identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
@@ -509,27 +531,26 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
-// STRICT dom/second resolution (no fallbacks)
-const domSecond = computeDomAndSecondKeysStrict({
-  raw: payload,
-  domKey: payload?.ctrl?.dominantKey,
-  secondKey: payload?.ctrl?.secondKey
-});
+    // STRICT dom/second resolution (no fallbacks)
+    const domSecond = computeDomAndSecondKeysStrict({
+      raw: payload,
+      domKey: payload?.ctrl?.dominantKey,
+      secondKey: payload?.ctrl?.secondKey
+    });
 
-// STRICT template selection (no safe default)
-const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
-if (!validCombos.has(domSecond.templateKey)) {
-  throw new Error(
-    `Invalid templateKey '${domSecond.templateKey}'. Expected one of: ${Array.from(validCombos).join(", ")}`
-  );
-}
+    // STRICT template selection (no safe default)
+    const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
+    if (!validCombos.has(domSecond.templateKey)) {
+      throw new Error(
+        `Invalid templateKey '${domSecond.templateKey}'. Expected one of: ${Array.from(validCombos).join(", ")}`
+      );
+    }
 
-const tpl = {
-  combo: domSecond.templateKey,
-  safeCombo: domSecond.templateKey,
-  tpl: `CTRL_PoC_Coach_Assessment_Profile_template_${domSecond.templateKey}.pdf`,
-};
-
+    const tpl = {
+      combo: domSecond.templateKey,
+      safeCombo: domSecond.templateKey,
+      tpl: `CTRL_PoC_Coach_Assessment_Profile_template_${domSecond.templateKey}.pdf`,
+    };
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
     const ov = applyLayoutOverridesFromUrl(L, url);
@@ -581,7 +602,7 @@ const tpl = {
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p3, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:COACH_V3.2] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:COACH_V4] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -611,7 +632,7 @@ const tpl = {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:COACH_V3.2] CRASH", err);
+    console.error("[fill-template:COACH_V4] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
