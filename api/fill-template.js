@@ -509,11 +509,11 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
-    const domSecond = computeDomAndSecondKeysStrict({
-      raw: payload,
-      domKey: payload?.dominantKey,
-      secondKey: payload?.secondKey
-    });
+const domSecond = computeDomAndSecondKeysStrict({
+  raw: payload,
+  domKey: payload?.ctrl?.dominantKey,
+  secondKey: payload?.ctrl?.secondKey
+});
 
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
     if (!validCombos.has(domSecond.templateKey)) {
