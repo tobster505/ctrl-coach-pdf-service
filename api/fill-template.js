@@ -27,8 +27,8 @@ function safeJson(obj) {
   catch { return { _error: "Could not serialise debug object" }; }
 }
 
-/* ───────── questions normaliser (dashes) ───────── */
-function asDashLines(input) {
+/* ───────── questions normaliser (dashes + optional cap) ───────── */
+function asDashLines(input, maxItems = 999) {
   const s0 = S(input).replace(/\r/g, "").trim();
   if (!s0) return "";
 
@@ -43,8 +43,10 @@ function asDashLines(input) {
     .map(line => line.replace(/^(\d+[\.\)]\s+|[-•]\s+)/, "").trim())
     .filter(Boolean);
 
-  return cleaned.map(q => `- ${q}`).join("\n");
+  const limited = cleaned.slice(0, Math.max(0, maxItems));
+  return limited.map(q => `- ${q}`).join("\n");
 }
+
 
 /* ───────── filename helpers ───────── */
 function clampStrForFilename(s) {
@@ -456,32 +458,33 @@ function normaliseInput(d = {}) {
     S(d.chart?.spiderUrl || d.chart?.url || "").trim() ||
     S(summary?.chart?.spiderUrl || "").trim();
 
-  // STRICT: keep text as-is; force questions to dash lines (no numbering)
-  return {
-    raw: d,
-    identity: { fullName, dateLabel },
-    bands: bandsRaw,
+// STRICT: keep text as-is; force questions to dash lines (no numbering)
+return {
+  raw: d,
+  identity: { fullName, dateLabel },
+  bands: bandsRaw,
 
-    exec_summary_text: S(text.exec_summary_text).trim(),
-    exec_summary_questions: asDashLines(text.exec_summary_questions),
+  exec_summary_text: S(text.exec_summary_text).trim(),
+  exec_summary_questions: asDashLines(text.exec_summary_questions),
 
-    ctrl_overview_text: S(text.ctrl_overview_text).trim(),
-    ctrl_overview_questions: asDashLines(text.ctrl_overview_questions),
+  ctrl_overview_text: S(text.ctrl_overview_text).trim(),
+  ctrl_overview_questions: asDashLines(text.ctrl_overview_questions),
 
-    ctrl_deepdive_text: S(text.ctrl_deepdive_text).trim(),
-    ctrl_deepdive_questions: asDashLines(text.ctrl_deepdive_questions),
+  ctrl_deepdive_text: S(text.ctrl_deepdive_text).trim(),
+  ctrl_deepdive_questions: asDashLines(text.ctrl_deepdive_questions, 4),
 
-    themes_text: S(text.themes_text).trim(),
-    themes_questions: asDashLines(text.themes_questions),
+  themes_text: S(text.themes_text).trim(),
+  themes_questions: asDashLines(text.themes_questions, 4),
 
-    adapt_with_colleagues_text: S(text.adapt_with_colleagues_text).trim(),
-    adapt_with_colleagues_questions: asDashLines(text.adapt_with_colleagues_questions),
+  adapt_with_colleagues_text: S(text.adapt_with_colleagues_text).trim(),
+  adapt_with_colleagues_questions: asDashLines(text.adapt_with_colleagues_questions),
 
-    adapt_with_leaders_text: S(text.adapt_with_leaders_text).trim(),
-    adapt_with_leaders_questions: asDashLines(text.adapt_with_leaders_questions),
+  adapt_with_leaders_text: S(text.adapt_with_leaders_text).trim(),
+  adapt_with_leaders_questions: asDashLines(text.adapt_with_leaders_questions),
 
-    chartUrl,
-  };
+  chartUrl,
+};
+
 }
 
 /* ───────── debug probe ───────── */
