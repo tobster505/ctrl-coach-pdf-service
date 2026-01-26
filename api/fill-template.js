@@ -383,7 +383,7 @@ const DEFAULT_LAYOUT = {
     // Page 4 (deepdive + themes): each split
     p5Text: {
       dd1: { x: 25, y: 140, w: 550, h: 170, size: 16, align: "left", maxLines: 10 },
-      dd2: { x: 25, y: 270, w: 550, h: 260, size: 16, align: "left", maxLines: 28 },
+      dd2: { x: 25, y: 240, w: 550, h: 260, size: 16, align: "left", maxLines: 28 },
       th1: { x: 25, y: 540, w: 550, h: 120, size: 16, align: "left", maxLines: 8 },
       th2: { x: 25, y: 650, w: 550, h: 190, size: 16, align: "left", maxLines: 22 },
     },
