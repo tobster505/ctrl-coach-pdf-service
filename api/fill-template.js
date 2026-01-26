@@ -390,10 +390,10 @@ const DEFAULT_LAYOUT = {
 
     // Page 5 work-with: split each column into text + questions
     p6WorkWith: {
-      collabC_text: { x: 30,  y: 300, w: 270, h: 110, size: 14, align: "left", maxLines: 7 },
-      collabC_q:    { x: 30,  y: 410, w: 270, h: 310, size: 14, align: "left", maxLines: 24 },
-      collabT_text: { x: 320, y: 300, w: 260, h: 110, size: 14, align: "left", maxLines: 7 },
-      collabT_q:    { x: 320, y: 410, w: 260, h: 310, size: 14, align: "left", maxLines: 24 },
+      collabC_text: { x: 30,  y: 300, w: 270, h: 110, size: 16, align: "left", maxLines: 7 },
+      collabC_q:    { x: 30,  y: 410, w: 270, h: 310, size: 16, align: "left", maxLines: 24 },
+      collabT_text: { x: 320, y: 300, w: 260, h: 110, size: 16, align: "left", maxLines: 7 },
+      collabT_q:    { x: 320, y: 410, w: 260, h: 310, size: 16, align: "left", maxLines: 24 },
     },
   },
 };
