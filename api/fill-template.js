@@ -509,22 +509,27 @@ export default async function handler(req, res) {
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
+// STRICT dom/second resolution (no fallbacks)
 const domSecond = computeDomAndSecondKeysStrict({
   raw: payload,
   domKey: payload?.ctrl?.dominantKey,
   secondKey: payload?.ctrl?.secondKey
 });
 
-    const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
-    if (!validCombos.has(domSecond.templateKey)) {
-      throw new Error(`Invalid templateKey '${domSecond.templateKey}'. Expected one of: ${Array.from(validCombos).join(", ")}`);
-    }
+// STRICT template selection (no safe default)
+const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
+if (!validCombos.has(domSecond.templateKey)) {
+  throw new Error(
+    `Invalid templateKey '${domSecond.templateKey}'. Expected one of: ${Array.from(validCombos).join(", ")}`
+  );
+}
 
-    const tpl = {
-      combo: domSecond.templateKey,
-      safeCombo: domSecond.templateKey,
-      tpl: `CTRL_PoC_Coach_Assessment_Profile_template_${domSecond.templateKey}.pdf`,
-    };
+const tpl = {
+  combo: domSecond.templateKey,
+  safeCombo: domSecond.templateKey,
+  tpl: `CTRL_PoC_Coach_Assessment_Profile_template_${domSecond.templateKey}.pdf`,
+};
+
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
     const ov = applyLayoutOverridesFromUrl(L, url);
